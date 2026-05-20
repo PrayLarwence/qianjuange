@@ -1530,6 +1530,51 @@ def delete_chapter(world_id: str, chapter_id: str, db: Session = Depends(get_db)
     return {"ok": True}
 
 
+# ============== editor agent (A5) ==============
+
+class ChapterCritiqueRequest(BaseModel):
+    provider: str | None = None
+
+
+@router.post("/chapters/{chapter_id}/critique")
+def critique_chapter(chapter_id: str, payload: ChapterCritiqueRequest, db: Session = Depends(get_db)):
+    """对某一章节跑 Editor 审稿。同步执行——LLM 调用可能需要几秒到几十秒，
+    前端应给出 loading 反馈。返回评注文本 + issue 列表。
+    """
+    cm = db.query(ChapterMarker).filter_by(id=chapter_id).first()
+    if not cm:
+        raise HTTPException(404, "chapter not found")
+    branch = db.query(Branch).filter_by(id=cm.branch_id).first()
+    if not branch:
+        raise HTTPException(500, "chapter has no branch")
+    world = db.query(World).filter_by(id=branch.world_id).first()
+    if not world:
+        raise HTTPException(500, "branch has no world")
+
+    from ..engine.editor import run_editor_for_chapter
+    result = run_editor_for_chapter(db, world, cm, provider_key=payload.provider)
+    return {
+        "ok": result.ok,
+        "reason": result.reason,
+        "scan_id": result.scan_id,
+        "issue_count": result.issue_count,
+        "critique_log_id": result.critique_log_id,
+        "critique_text": result.critique_text,
+        "tick_from": result.tick_from,
+        "tick_to": result.tick_to,
+    }
+
+
+@router.get("/chapters/{chapter_id}/critique")
+def get_chapter_critique(chapter_id: str, db: Session = Depends(get_db)):
+    """读章节当前评注与对应的 issues。没审过返 has_critique=False。"""
+    cm = db.query(ChapterMarker).filter_by(id=chapter_id).first()
+    if not cm:
+        raise HTTPException(404, "chapter not found")
+    from ..engine.editor import get_chapter_critique as _get
+    return _get(db, cm)
+
+
 class AutoChapterRequest(BaseModel):
     target_count: int = 5
     provider: str | None = None

@@ -85,6 +85,7 @@ function sandbox() {
     settingsSaving: false,
     stylesAvailable: [],
     stylePreview: { id: '', name: '', spec_text: '', samples: [] },
+    chapterCritique: { open: false, loading: false, chapter: null, data: null, error: '' },
 
     showExplore: false,
     exploreVariants: [{ label: 'A', directive: '' }, { label: 'B', directive: '' }],
@@ -2887,6 +2888,48 @@ function sandbox() {
 
     chapterAtTick(tick) {
       return this.chapters.find(c => c.tick === tick) || null;
+    },
+
+    async openChapterCritique(chapter) {
+      if (!chapter) return;
+      this.chapterCritique = { open: true, loading: true, chapter, data: null, error: '' };
+      try {
+        const r = await this.api('GET', `/chapters/${chapter.id}/critique`);
+        this.chapterCritique.data = r;
+      } catch (e) {
+        this.chapterCritique.error = e.message || '加载失败';
+      } finally {
+        this.chapterCritique.loading = false;
+      }
+    },
+
+    async runChapterCritique() {
+      const ch = this.chapterCritique.chapter;
+      if (!ch) return;
+      this.chapterCritique.loading = true;
+      this.chapterCritique.error = '';
+      try {
+        const r = await this.api('POST', `/chapters/${ch.id}/critique`,
+          { provider: this.provider }, 180000);
+        if (!r.ok) {
+          this.chapterCritique.error = r.reason || '审稿失败';
+        } else {
+          // 刷新一下整体 timeline——评注会在 include_drafts=1 时出现
+          const fresh = await this.api('GET', `/chapters/${ch.id}/critique`);
+          this.chapterCritique.data = fresh;
+          this.flashToast(r.issue_count > 0
+            ? `Editor 发现 ${r.issue_count} 处需关注`
+            : 'Editor 审稿通过');
+        }
+      } catch (e) {
+        this.chapterCritique.error = e.message || '请求失败';
+      } finally {
+        this.chapterCritique.loading = false;
+      }
+    },
+
+    closeChapterCritique() {
+      this.chapterCritique = { open: false, loading: false, chapter: null, data: null, error: '' };
     },
 
     async openTemplates() {
