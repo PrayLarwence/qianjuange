@@ -16,6 +16,7 @@ function sandbox() {
     selectedEntity: null,
     viewMode: 'graph',
     cy: null,
+    graphHelpDismissed: typeof localStorage !== 'undefined' && localStorage.getItem('graphHelpSeen') === '1',
 
     provider: '',
     directive: '',
@@ -1190,25 +1191,29 @@ function sandbox() {
       const ourEventIds = new Set(this.timeline.events.map(e => e.id));
       const ourLinkKeys = new Set(this.timeline.links.map(l => l.cause + '__' + l.effect));
 
+      const sorted = events.slice().sort((a, b) => a.tick - b.tick || (a.id || '').localeCompare(b.id || ''));
+      const stepNo = new Map(sorted.map((e, i) => [e.id, i + 1]));
+
       const elements = [
         ...events.map(e => {
           const importance = (degree[e.id] || 0) + (e.participants || []).length;
           const isNew = !ourEventIds.has(e.id);
+          const step = stepNo.get(e.id) || 0;
+          const title = e.title || '(无标题)';
           return {
             data: {
               id: e.id,
-              label: `t${e.tick} · ${truncate(e.title, 10)}`,
-              title: e.title,
+              label: `第 ${step} 步\n${title}`,
+              title,
               description: e.description || '',
               tick: e.tick,
+              step,
               participants: (e.participants || []).map(p => this.nameOf(p)).join('、'),
               fillColor: colorForTick(e.tick),
-              fontSize: 10 + Math.min(4, importance * 0.6),
-              padding: 8 + Math.min(14, importance * 1.6),
-              borderWidth: isNew ? 2.5 : 1,
-              borderColor: isNew ? '#fbbf24' : '#3b0764',
+              fontSize: 11 + Math.min(3, importance * 0.4),
               isNew,
             },
+            classes: isNew ? 'is-new' : '',
           };
         }),
         ...validLinks.map(l => ({
@@ -1217,6 +1222,7 @@ function sandbox() {
             source: l.cause,
             target: l.effect,
             description: l.description || '',
+            edgeLabel: truncate(l.description || '', 22),
             isNew: !ourLinkKeys.has(l.cause + '__' + l.effect),
           },
         })),
@@ -1234,37 +1240,53 @@ function sandbox() {
           { selector: 'node', style: {
             'background-color': 'data(fillColor)',
             'background-opacity': 0.92,
-            'border-color': 'data(borderColor)',
-            'border-width': 'data(borderWidth)',
+            'border-color': '#3b0764',
+            'border-width': 1.5,
             'label': 'data(label)',
             'color': '#fafafa',
             'font-size': 'data(fontSize)',
             'font-family': 'system-ui, -apple-system, sans-serif',
+            'font-weight': 500,
             'text-valign': 'center',
             'text-halign': 'center',
+            'text-wrap': 'wrap',
+            'text-max-width': 180,
+            'line-height': 1.25,
             'width': 'label',
             'height': 'label',
-            'padding': 'data(padding)',
+            'padding': 12,
             'shape': 'round-rectangle',
             'text-outline-color': '#09090b',
-            'text-outline-width': 1,
+            'text-outline-width': 1.2,
+          }},
+          { selector: 'node.is-new', style: {
+            'border-color': '#fbbf24',
+            'border-width': 3,
           }},
           { selector: 'edge', style: {
             'curve-style': 'bezier',
             'target-arrow-shape': 'triangle',
-            'line-color': '#71717a',
-            'target-arrow-color': '#71717a',
-            'width': 1.5,
+            'line-color': '#52525b',
+            'target-arrow-color': '#a1a1aa',
+            'width': 1.6,
+            'arrow-scale': 1.3,
+            'label': 'data(edgeLabel)',
+            'font-size': 9,
+            'color': '#d4d4d8',
+            'text-rotation': 'autorotate',
+            'text-background-color': '#09090b',
+            'text-background-opacity': 0.85,
+            'text-background-padding': 3,
           }},
           { selector: 'edge[?isNew]', style: {
             'line-color': '#fbbf24',
             'target-arrow-color': '#fbbf24',
-            'width': 2,
+            'width': 2.2,
           }},
         ],
         layout: useDagre
-          ? { name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 80, edgeSep: 12, padding: 20, animate: false }
-          : { name: 'breadthfirst', directed: true, spacingFactor: 1.4, padding: 20 },
+          ? { name: 'dagre', rankDir: 'LR', nodeSep: 50, rankSep: 130, edgeSep: 18, padding: 24, animate: false }
+          : { name: 'breadthfirst', directed: true, spacingFactor: 1.6, padding: 24 },
       });
       this.cyCompare.fit(null, 30);
     },
@@ -3113,6 +3135,11 @@ function sandbox() {
       if (this.cy) this.cy.nodes().removeClass('link-source-node');
     },
 
+    dismissGraphHelp() {
+      this.graphHelpDismissed = true;
+      try { localStorage.setItem('graphHelpSeen', '1'); } catch (e) {}
+    },
+
     async completeLink(targetNodeId) {
       const cause = this.linkSourceId;
       const effect = targetNodeId;
@@ -3294,14 +3321,18 @@ function sandbox() {
       const eventIds = new Set(events.map(e => e.id));
       const validLinks = links.filter(l => eventIds.has(l.cause) && eventIds.has(l.effect));
 
-      const truncate = (s, n) => (s && s.length > n) ? s.slice(0, n) + '…' : (s || '');
+      const truncate = (s, n) => (s && s.length > n) ? s.slice(0, n - 1) + '…' : (s || '');
 
-      const degree = {};
-      events.forEach(e => { degree[e.id] = 0; });
+      const inDeg = {}, outDeg = {};
+      events.forEach(e => { inDeg[e.id] = 0; outDeg[e.id] = 0; });
       validLinks.forEach(l => {
-        degree[l.cause] = (degree[l.cause] || 0) + 1;
-        degree[l.effect] = (degree[l.effect] || 0) + 1;
+        outDeg[l.cause] = (outDeg[l.cause] || 0) + 1;
+        inDeg[l.effect] = (inDeg[l.effect] || 0) + 1;
       });
+
+      // 按 (tick 升, id) 编步骤号 1..N，让用户看到 "第 N 步" 而不是裸 tick
+      const sorted = events.slice().sort((a, b) => a.tick - b.tick || (a.id || '').localeCompare(b.id || ''));
+      const stepNo = new Map(sorted.map((e, i) => [e.id, i + 1]));
 
       const ticks = events.map(e => e.tick);
       const tMin = ticks.length ? Math.min(...ticks) : 0;
@@ -3318,25 +3349,37 @@ function sandbox() {
 
       const elements = [
         ...events.map(e => {
-          const deg = degree[e.id] || 0;
+          const deg = (inDeg[e.id] || 0) + (outDeg[e.id] || 0);
           const partCount = (e.participants || []).length;
           const importance = deg + partCount;
+          const isStart = (inDeg[e.id] || 0) === 0 && (outDeg[e.id] || 0) > 0;
+          const isLatest = e.tick === tMax;
+          const isIsolated = deg === 0;
+          const step = stepNo.get(e.id) || 0;
+          const title = e.title || '(无标题)';
+          // 多行 label：第 1 行 step 徽章，第 2 行完整标题（不截断，由 cytoscape wrap）
+          const label = `第 ${step} 步\n${title}`;
+          const classes = [];
+          if (isStart) classes.push('is-start');
+          if (isLatest) classes.push('is-latest');
+          if (isIsolated) classes.push('is-isolated');
           return {
             data: {
               id: e.id,
-              label: `t${e.tick} · ${truncate(e.title, 10)}`,
+              label,
               tick: e.tick,
-              title: e.title,
+              step,
+              title,
               description: e.description || '',
               participants: (e.participants || []).map(p => this.nameOf(p)).join('、'),
               importance,
-              isLatest: e.tick === tMax,
+              isLatest,
+              isStart,
+              isIsolated,
               fillColor: colorForTick(e.tick),
-              fontSize: 10 + Math.min(4, importance * 0.6),
-              padding: 8 + Math.min(14, importance * 1.6),
-              borderWidth: e.tick === tMax ? 2.5 : 1,
-              borderColor: e.tick === tMax ? '#fbbf24' : '#064e3b',
+              fontSize: 12 + Math.min(3, importance * 0.4),
             },
+            classes: classes.join(' '),
           };
         }),
         ...validLinks.map(l => ({
@@ -3345,6 +3388,7 @@ function sandbox() {
             source: l.cause,
             target: l.effect,
             description: l.description || '',
+            edgeLabel: truncate(l.description || '', 22),
           },
         })),
       ];
@@ -3361,49 +3405,78 @@ function sandbox() {
           { selector: 'node', style: {
             'background-color': 'data(fillColor)',
             'background-opacity': 0.92,
-            'border-color': 'data(borderColor)',
-            'border-width': 'data(borderWidth)',
+            'border-color': '#27272a',
+            'border-width': 1.5,
             'label': 'data(label)',
             'color': '#fafafa',
             'font-size': 'data(fontSize)',
             'font-family': 'system-ui, -apple-system, sans-serif',
+            'font-weight': 500,
             'text-valign': 'center',
             'text-halign': 'center',
+            'text-wrap': 'wrap',
+            'text-max-width': 180,
+            'line-height': 1.25,
             'width': 'label',
             'height': 'label',
-            'padding': 'data(padding)',
+            'padding': 12,
             'shape': 'round-rectangle',
             'text-outline-color': '#09090b',
-            'text-outline-width': 1,
+            'text-outline-width': 1.2,
+          }},
+          { selector: 'node.is-start', style: {
+            'border-color': '#10b981',
+            'border-width': 3.5,
+          }},
+          { selector: 'node.is-latest', style: {
+            'border-color': '#fbbf24',
+            'border-width': 3.5,
+          }},
+          { selector: 'node.is-isolated', style: {
+            'opacity': 0.45,
+            'border-style': 'dashed',
+            'border-color': '#52525b',
           }},
           { selector: 'node:selected', style: {
             'border-color': '#fef3c7',
-            'border-width': 3,
+            'border-width': 4,
           }},
           { selector: 'edge', style: {
             'curve-style': 'bezier',
             'target-arrow-shape': 'triangle',
-            'line-color': '#71717a',
-            'target-arrow-color': '#71717a',
-            'width': 1.5,
-            'arrow-scale': 1.1,
+            'line-color': '#52525b',
+            'target-arrow-color': '#a1a1aa',
+            'width': 1.8,
+            'arrow-scale': 1.4,
+            'label': 'data(edgeLabel)',
+            'font-size': 9,
+            'color': '#d4d4d8',
+            'text-rotation': 'autorotate',
+            'text-background-color': '#09090b',
+            'text-background-opacity': 0.85,
+            'text-background-padding': 3,
+            'text-background-shape': 'round-rectangle',
+            'text-border-color': '#3f3f46',
+            'text-border-width': 0.5,
+            'text-border-opacity': 0.6,
           }},
           { selector: 'edge:selected', style: {
             'line-color': '#f59e0b',
             'target-arrow-color': '#f59e0b',
-            'width': 2.5,
+            'width': 2.8,
+            'color': '#fde68a',
           }},
-          { selector: '.faded', style: { 'opacity': 0.18 } },
+          { selector: '.faded', style: { 'opacity': 0.15 } },
           { selector: '.hover-highlight', style: {
             'line-color': '#10b981',
             'target-arrow-color': '#10b981',
             'border-color': '#10b981',
-            'border-width': 3,
+            'border-width': 3.5,
           }},
         ],
         layout: useDagre
-          ? { name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 80, edgeSep: 12, padding: 20, animate: false }
-          : { name: 'breadthfirst', directed: true, spacingFactor: 1.4, padding: 20 },
+          ? { name: 'dagre', rankDir: 'LR', nodeSep: 50, rankSep: 130, edgeSep: 18, padding: 24, animate: false }
+          : { name: 'breadthfirst', directed: true, spacingFactor: 1.6, padding: 24 },
       });
 
       const cyEl = el;
@@ -3417,12 +3490,14 @@ function sandbox() {
         const d = evt.target.data();
         hovering = evt.target;
         evt.target.addClass('hover-highlight');
-        const parts = [`<div class="tt-title">${escapeHtml(d.title || '')}</div>`];
-        if (d.description) parts.push(`<div>${escapeHtml(d.description)}</div>`);
-        const meta = [`tick ${d.tick}`, `重要度 ${d.importance}`];
-        if (d.participants) meta.push(`参与: ${escapeHtml(d.participants)}`);
-        if (d.isLatest) meta.push('🆕 最新');
-        parts.push(`<div class="tt-meta">${meta.join(' · ')}</div>`);
+        const tagBits = [];
+        if (d.isStart) tagBits.push('<span class="tt-tag tt-start">起点</span>');
+        if (d.isLatest) tagBits.push('<span class="tt-tag tt-latest">最新</span>');
+        if (d.isIsolated) tagBits.push('<span class="tt-tag tt-isolated">孤立</span>');
+        const head = `<div class="tt-step">第 ${d.step} 步 · tick ${d.tick}${tagBits.length ? ' ' + tagBits.join('') : ''}</div>`;
+        const parts = [head, `<div class="tt-title">${escapeHtml(d.title || '')}</div>`];
+        if (d.participants) parts.push(`<div class="tt-meta">👥 ${escapeHtml(d.participants)}</div>`);
+        if (d.description) parts.push(`<div class="tt-desc">${escapeHtml(d.description)}</div>`);
         showTip(parts.join(''));
       });
       this.cy.on('mouseout', 'node', (evt) => {
@@ -3434,8 +3509,8 @@ function sandbox() {
         const d = evt.target.data();
         hovering = evt.target;
         evt.target.addClass('hover-highlight');
-        const text = d.description || '(无描述)';
-        showTip(`<div>${escapeHtml(text)}</div><div class="tt-meta">因果链</div>`);
+        const text = d.description || '(没写因果描述)';
+        showTip(`<div class="tt-edge-head">因为 → 所以</div><div class="tt-desc">${escapeHtml(text)}</div>`);
       });
       this.cy.on('mouseout', 'edge', (evt) => {
         if (hovering === evt.target) hovering = null;

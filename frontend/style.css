@@ -356,8 +356,8 @@ body {
 
 #cy-tooltip {
   display: none;
-  max-width: 320px;
-  padding: 8px 12px;
+  max-width: 340px;
+  padding: 10px 12px;
   background: rgba(9, 9, 11, 0.96);
   border: 1px solid #3f3f46;
   border-radius: 8px;
@@ -369,8 +369,15 @@ body {
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
   font-family: system-ui, -apple-system, sans-serif;
 }
-#cy-tooltip .tt-title { color: #fef3c7; font-weight: 600; margin-bottom: 4px; }
-#cy-tooltip .tt-meta { color: #71717a; font-size: 10px; margin-top: 4px; }
+#cy-tooltip .tt-step { color: #71717a; font-size: 10px; margin-bottom: 3px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+#cy-tooltip .tt-title { color: #fef3c7; font-weight: 600; font-size: 13px; margin-bottom: 5px; line-height: 1.35; }
+#cy-tooltip .tt-meta { color: #a1a1aa; font-size: 11px; margin-top: 4px; }
+#cy-tooltip .tt-desc { color: #d4d4d8; font-size: 11px; margin-top: 5px; padding-top: 5px; border-top: 1px solid #27272a; line-height: 1.5; }
+#cy-tooltip .tt-edge-head { color: #fbbf24; font-weight: 600; font-size: 11px; margin-bottom: 2px; letter-spacing: 0.05em; }
+#cy-tooltip .tt-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 600; letter-spacing: 0.03em; }
+#cy-tooltip .tt-tag.tt-start { background: rgba(16,185,129,0.18); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.4); }
+#cy-tooltip .tt-tag.tt-latest { background: rgba(251,191,36,0.18); color: #fcd34d; border: 1px solid rgba(251,191,36,0.4); }
+#cy-tooltip .tt-tag.tt-isolated { background: rgba(82,82,91,0.3); color: #a1a1aa; border: 1px solid #52525b; }
 
 .cy-ctx-menu {
   position: absolute;
