@@ -2037,6 +2037,7 @@ def entity_arc(entity_id: str, db: Session = Depends(get_db)):
         .order_by(Event.tick).all()
     )
     relevant = [ev for ev in events if entity_id in (ev.participants or [])]
+    relevant_ids = {ev.id for ev in relevant}
 
     nar = (
         db.query(NarrativeLog).filter_by(branch_id=branch_id)
@@ -2047,6 +2048,33 @@ def entity_arc(entity_id: str, db: Session = Depends(get_db)):
         nar_by_tick.setdefault(n.tick, []).append(n.text)
 
     by_id = {e.id: e for e in db.query(Entity).filter_by(branch_id=branch_id).all()}
+    ev_by_id = {ev.id: ev for ev in events}
+
+    # B2: 因果链——只取本角色相关事件作为 cause 或 effect 的链
+    links = (
+        db.query(CausalLink)
+        .filter(CausalLink.branch_id == branch_id)
+        .filter((CausalLink.cause_event_id.in_(relevant_ids)) |
+                (CausalLink.effect_event_id.in_(relevant_ids)))
+        .all()
+    ) if relevant_ids else []
+    incoming: dict[str, list[dict]] = {}  # effect_event_id -> [{cause_id, cause_title, cause_tick, weight}]
+    outgoing: dict[str, list[dict]] = {}  # cause_event_id  -> [{effect_id, effect_title, effect_tick, weight}]
+    for lk in links:
+        ce = ev_by_id.get(lk.cause_event_id)
+        ef = ev_by_id.get(lk.effect_event_id)
+        if not ce or not ef:
+            continue
+        if lk.effect_event_id in relevant_ids:
+            incoming.setdefault(lk.effect_event_id, []).append({
+                "event_id": ce.id, "title": ce.title, "tick": ce.tick,
+                "weight": lk.weight or 1.0,
+            })
+        if lk.cause_event_id in relevant_ids:
+            outgoing.setdefault(lk.cause_event_id, []).append({
+                "event_id": ef.id, "title": ef.title, "tick": ef.tick,
+                "weight": lk.weight or 1.0,
+            })
 
     arc = []
     for ev in relevant:
@@ -2063,6 +2091,8 @@ def entity_arc(entity_id: str, db: Session = Depends(get_db)):
             "co_participants": co_parts,
             "narration": narration_snippets,
             "metadata": ev.metadata_ or {},
+            "incoming_links": incoming.get(ev.id, []),
+            "outgoing_links": outgoing.get(ev.id, []),
         })
 
     relations_now = (ent.attributes or {}).get("_relations") or {}
@@ -2072,6 +2102,35 @@ def entity_arc(entity_id: str, db: Session = Depends(get_db)):
             other = by_id.get(other_id)
             if other:
                 rel_map.append({"other_id": other_id, "other_name": other.name, "label": label})
+
+    # B2: 涉及本角色的 open ConsistencyIssue
+    issues = (
+        db.query(ConsistencyIssue)
+        .filter_by(branch_id=branch_id, status="open")
+        .order_by(ConsistencyIssue.tick_end.desc(), ConsistencyIssue.created_at.desc())
+        .all()
+    )
+    open_issues = []
+    for iss in issues:
+        eids = iss.entity_ids or []
+        if entity_id not in eids:
+            continue
+        open_issues.append({
+            "id": iss.id,
+            "category": iss.category, "severity": iss.severity,
+            "title": iss.title, "description": iss.description,
+            "suggestion": iss.suggestion or "",
+            "tick_start": iss.tick_start, "tick_end": iss.tick_end,
+        })
+
+    ticks = [b["tick"] for b in arc]
+    stats = {
+        "first_tick": min(ticks) if ticks else None,
+        "last_tick": max(ticks) if ticks else None,
+        "event_count": len(arc),
+        "open_issue_count": len(open_issues),
+        "causal_link_count": sum(len(v) for v in incoming.values()) + sum(len(v) for v in outgoing.values()),
+    }
 
     return {
         "entity": {
@@ -2083,6 +2142,8 @@ def entity_arc(entity_id: str, db: Session = Depends(get_db)):
         },
         "arc": arc,
         "current_relations": rel_map,
+        "open_issues": open_issues,
+        "stats": stats,
         "total_events": len(relevant),
     }
 

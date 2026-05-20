@@ -1586,6 +1586,8 @@
           <span x-text="'共参与 ' + (arcData?.total_events || 0) + ' 件事'"></span>
           <span x-show="arcData?.entity?.current_location" class="mx-1.5">·</span>
           <span x-show="arcData?.entity?.current_location" x-text="'现在: ' + arcData?.entity?.current_location"></span>
+          <span x-show="(arcData?.stats?.open_issue_count || 0) > 0" class="ml-2 text-rose-400"
+            x-text="'🔴 ' + arcData.stats.open_issue_count + ' 个未解决问题'"></span>
           <span x-show="arcData?.entity?.alive === 0" class="ml-2 text-red-400">已不在</span>
         </div>
       </div>
@@ -1644,6 +1646,32 @@
         </div>
       </div>
 
+      <!-- B2: 涉及本角色的未解决一致性问题 -->
+      <div x-show="(arcData?.open_issues || []).length" class="mb-4 bg-rose-950/15 border border-rose-900/40 rounded p-3">
+        <div class="text-xs text-rose-300 mb-2 font-medium flex items-center gap-2">
+          <span>🔴 未解决的一致性问题</span>
+          <span class="text-zinc-500" x-text="'(' + (arcData?.open_issues?.length || 0) + ')'"></span>
+        </div>
+        <div class="space-y-1.5">
+          <template x-for="iss in (arcData?.open_issues || [])" :key="iss.id">
+            <div class="text-xs bg-zinc-950/60 border border-zinc-800 rounded px-2 py-1.5">
+              <div class="flex items-center gap-1.5 mb-0.5">
+                <span class="text-[10px] px-1 py-0.5 rounded font-mono"
+                  :class="iss.severity === 'high' ? 'bg-red-900/60 text-red-200' : iss.severity === 'medium' ? 'bg-amber-900/50 text-amber-200' : 'bg-zinc-800 text-zinc-400'"
+                  x-text="iss.severity"></span>
+                <span class="text-[10px] text-zinc-500" x-text="iss.category"></span>
+                <span class="text-[10px] text-zinc-600 ml-auto font-mono"
+                  x-text="iss.tick_start === iss.tick_end ? ('t' + iss.tick_end) : ('t' + iss.tick_start + '-' + iss.tick_end)"></span>
+              </div>
+              <div class="font-medium text-zinc-200" x-text="iss.title"></div>
+              <div class="text-zinc-400 mt-0.5 leading-relaxed" x-text="iss.description"></div>
+              <div x-show="iss.suggestion" class="mt-1 text-emerald-400/80 text-[11px]"
+                x-text="'建议：' + iss.suggestion"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+
       <div x-show="arcData && arcData.arc.length === 0" class="text-center text-zinc-600 py-8 text-sm">
         这个角色还没有参与任何事件
       </div>
@@ -1669,6 +1697,24 @@
                 <template x-for="(snip, si) in (beat.narration || [])" :key="si">
                   <div class="mt-2 text-xs text-zinc-400 italic border-l-2 border-amber-800/40 pl-2 leading-relaxed" x-text="'「' + snip + '」'"></div>
                 </template>
+                <!-- B2: 因果链小标签 -->
+                <div x-show="(beat.incoming_links || []).length || (beat.outgoing_links || []).length"
+                  class="mt-2 flex flex-wrap gap-1 text-[10px]">
+                  <template x-for="lk in (beat.incoming_links || [])" :key="'in_' + lk.event_id">
+                    <span class="bg-blue-950/40 border border-blue-900/50 text-blue-300 rounded px-1.5 py-0.5"
+                      :title="'因为：' + lk.title">
+                      <span class="font-mono opacity-70" x-text="'← t' + lk.tick"></span>
+                      <span class="ml-1" x-text="lk.title"></span>
+                    </span>
+                  </template>
+                  <template x-for="lk in (beat.outgoing_links || [])" :key="'out_' + lk.event_id">
+                    <span class="bg-emerald-950/40 border border-emerald-900/50 text-emerald-300 rounded px-1.5 py-0.5"
+                      :title="'导致：' + lk.title">
+                      <span class="font-mono opacity-70" x-text="'→ t' + lk.tick"></span>
+                      <span class="ml-1" x-text="lk.title"></span>
+                    </span>
+                  </template>
+                </div>
               </button>
             </div>
           </template>
