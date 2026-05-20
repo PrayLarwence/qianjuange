@@ -34,7 +34,7 @@ function sandbox() {
     settingsMessage: '',
 
     // dev 抽屉：A6 起所有新功能默认进这里。主页 timeline 不再加东西。
-    devDrawer: { open: false, savingRules: false },
+    devDrawer: { open: false, savingRules: false, recap: { running: false, message: '', stats: null } },
     llmConfig: { active: 'claude', providers: {} },
     llmMeta: {},
     keyDrafts: {},
@@ -2967,6 +2967,68 @@ function sandbox() {
         alert('保存失败: ' + e.message);
       } finally {
         this.devDrawer.savingRules = false;
+      }
+    },
+
+    chapterRecapEnabled() {
+      return !this.worldRules().disable_chapter_recap;
+    },
+
+    async toggleChapterRecap(enabled) {
+      if (!this.currentWorldId) return;
+      const rules = { ...this.worldRules() };
+      if (enabled) {
+        delete rules.disable_chapter_recap;
+      } else {
+        rules.disable_chapter_recap = true;
+      }
+      this.devDrawer.savingRules = true;
+      try {
+        await this.api('PATCH', `/worlds/${this.currentWorldId}`, { rules });
+        if (this.world?.world) this.world.world.rules = rules;
+        this.flashToast(enabled ? '章节回顾已启用' : '章节回顾已关闭');
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      } finally {
+        this.devDrawer.savingRules = false;
+      }
+    },
+
+    chapterSummaryStats() {
+      // 从 this.chapters 推算 N/M。chapters 由 loadChapters() 维护。
+      const list = this.chapters || [];
+      const total = list.length;
+      const filled = list.filter(c => (c.summary || '').trim()).length;
+      return { filled, total };
+    },
+
+    async regenerateChapterSummaries(onlyMissing) {
+      if (!this.currentWorldId) return;
+      const stats = this.chapterSummaryStats();
+      if (stats.total === 0) {
+        alert('当前还没有章节标记。请先在 timeline 上标记章节。');
+        return;
+      }
+      const targetCount = onlyMissing ? (stats.total - stats.filled) : stats.total;
+      if (targetCount <= 0) {
+        alert('所有章节都已有摘要。如需重写，关掉"仅补漏"。');
+        return;
+      }
+      if (!confirm(`将为 ${targetCount} 个章节生成摘要（每章 1 次 LLM 调用，可能需要 ${Math.ceil(targetCount * 8)} 秒以上）。继续？`)) return;
+
+      this.devDrawer.recap = { running: true, message: '生成中…', stats: null };
+      try {
+        const r = await this.api('POST', `/worlds/${this.currentWorldId}/chapters/regenerate-summaries`, {
+          only_missing: !!onlyMissing,
+        });
+        this.devDrawer.recap = {
+          running: false,
+          message: `完成：成功 ${r.chapters_succeeded} / 失败 ${r.chapters_failed}`,
+          stats: r,
+        };
+        await this.loadChapters();
+      } catch (e) {
+        this.devDrawer.recap = { running: false, message: '失败：' + e.message, stats: null };
       }
     },
 

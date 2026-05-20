@@ -121,6 +121,13 @@ def _migrate() -> None:
             # 显式记录的索引 sqlalchemy create_all 已建。
         except Exception:
             pass
+        # B1: ChapterMarker 加 summary（章节凝练）
+        try:
+            cmcols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(chapter_markers)").fetchall()}
+            if cmcols and "summary" not in cmcols:
+                conn.exec_driver_sql("ALTER TABLE chapter_markers ADD COLUMN summary TEXT DEFAULT ''")
+        except Exception:
+            pass
 
 
 def get_db():

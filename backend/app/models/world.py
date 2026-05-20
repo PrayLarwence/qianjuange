@@ -135,6 +135,7 @@ class ChapterMarker(Base):
     tick = Column(Integer, nullable=False)
     title = Column(String, default="")
     note = Column(Text, default="")
+    summary = Column(Text, default="")  # B1: 章节凝练（一两句话），喂给 Director prompt
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

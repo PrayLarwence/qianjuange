@@ -1453,7 +1453,8 @@ def list_chapters(world_id: str, db: Session = Depends(get_db)):
         .order_by(ChapterMarker.tick).all()
     )
     return {"chapters": [{
-        "id": r.id, "tick": r.tick, "title": r.title or "", "note": r.note or ""
+        "id": r.id, "tick": r.tick, "title": r.title or "",
+        "note": r.note or "", "summary": r.summary or ""
     } for r in rows]}
 
 
@@ -1578,6 +1579,38 @@ def get_chapter_critique(chapter_id: str, db: Session = Depends(get_db)):
 class AutoChapterRequest(BaseModel):
     target_count: int = 5
     provider: str | None = None
+
+
+class RegenerateSummariesRequest(BaseModel):
+    provider: str | None = None
+    only_missing: bool = False  # True 时跳过已有 summary 的章节
+
+
+@router.post("/worlds/{world_id}/chapters/regenerate-summaries")
+def regenerate_chapter_summaries(
+    world_id: str, payload: RegenerateSummariesRequest, db: Session = Depends(get_db)
+):
+    """B1：批量为本世界 active branch 的章节生成 summary（喂 Director prompt 用）。
+
+    同步执行——每章一次 LLM 调用，章节多时会比较慢。前端应给 loading。
+    only_missing=True 时只补漏，否则全量重写。
+    """
+    world = db.query(World).filter_by(id=world_id).first()
+    if not world:
+        raise HTTPException(404, "world not found")
+
+    from ..engine.recap import regenerate_all_summaries
+    provider = get_provider(payload.provider) if payload.provider else get_provider()
+    if provider is None:
+        raise HTTPException(503, "no LLM provider available")
+    result = regenerate_all_summaries(db, world, provider, only_missing=payload.only_missing)
+    return {
+        "ok": result.ok,
+        "reason": result.reason,
+        "chapters_processed": result.chapters_processed,
+        "chapters_succeeded": result.chapters_succeeded,
+        "chapters_failed": result.chapters_failed,
+    }
 
 
 @router.post("/worlds/{world_id}/chapters/auto")

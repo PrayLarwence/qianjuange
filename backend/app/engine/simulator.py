@@ -119,6 +119,10 @@ def _build_user_prompt(db: Session, snapshot: dict, user_directive: Optional[str
     rules_text = render_world_rules(world.rules or {})
     if rules_text:
         parts.append("\n# 世界规则（强约束）\n" + rules_text)
+    from .recap import build_chapter_recap_block
+    recap = build_chapter_recap_block(db, world)
+    if recap:
+        parts.append(recap)
     feedback = _build_self_correction_block(db, world)
     if feedback:
         parts.append(feedback)

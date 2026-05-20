@@ -2169,6 +2169,53 @@
         </div>
       </fieldset>
 
+      <!-- B1: 章节摘要 -->
+      <fieldset class="border border-zinc-800 rounded p-3 space-y-2">
+        <legend class="px-1 text-xs text-sky-400">B1 · 章节回顾入 prompt</legend>
+        <div class="text-xs text-zinc-400 leading-relaxed">
+          每章一句话凝练，下次推演时按时间顺序塞给 Director。
+          缓解 LLM 写到第十章时早就忘了第三章的问题——事件标题（细粒度）+ 章节回顾（长跨度）互补。
+        </div>
+
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" :checked="chapterRecapEnabled()"
+            @change="toggleChapterRecap($event.target.checked)"
+            :disabled="devDrawer.savingRules" />
+          <span x-text="chapterRecapEnabled() ? '已启用（默认）' : '已关闭'"></span>
+        </label>
+
+        <div class="text-xs text-zinc-300 mt-2 flex items-center gap-2">
+          <span>已生成：</span>
+          <span class="font-mono"
+            x-text="`${chapterSummaryStats().filled} / ${chapterSummaryStats().total}`"></span>
+          <span class="text-[11px] text-zinc-600"
+            x-show="chapterSummaryStats().total === 0">（先在时间线上标记章节）</span>
+        </div>
+
+        <div class="flex gap-2 pt-1">
+          <button @click="regenerateChapterSummaries(true)"
+            :disabled="devDrawer.recap.running || chapterSummaryStats().total === 0"
+            class="miku-btn text-xs flex-1"
+            :class="(devDrawer.recap.running || chapterSummaryStats().total === 0) ? 'opacity-50 cursor-not-allowed' : ''">
+            仅补漏
+          </button>
+          <button @click="regenerateChapterSummaries(false)"
+            :disabled="devDrawer.recap.running || chapterSummaryStats().total === 0"
+            class="miku-btn text-xs flex-1"
+            :class="(devDrawer.recap.running || chapterSummaryStats().total === 0) ? 'opacity-50 cursor-not-allowed' : ''">
+            全部重写
+          </button>
+        </div>
+
+        <div x-show="devDrawer.recap.message" class="text-xs"
+          :class="devDrawer.recap.running ? 'text-zinc-400' : 'text-emerald-400'"
+          x-text="devDrawer.recap.message"></div>
+
+        <div class="text-[11px] text-zinc-600">
+          注意：每章一次 LLM 调用。10 章约 80-150 秒；建议章节闭合后批量跑一次。
+        </div>
+      </fieldset>
+
       <div class="text-[11px] text-zinc-600 italic">后续 A/B 路线的实验功能会陆续出现在这里。</div>
     </div>
   </div>
