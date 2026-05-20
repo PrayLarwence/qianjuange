@@ -29,7 +29,10 @@ def _entity_full(e: Entity) -> dict:
     }
 
 
-def _entity_for_prompt(e: dict) -> dict:
+MEMORY_PER_CHAR_LIMIT = 8
+
+
+def _entity_for_prompt(e: dict, recent_event_ids: Optional[set[str]] = None) -> dict:
     """Compact entity dict — drop empty/null fields to save tokens.
 
     Takes a dict (from _entity_full) so the same data feeds both API and prompt.
@@ -54,6 +57,31 @@ def _entity_for_prompt(e: dict) -> dict:
         if p.get("knowledge_blindspots"): kept["knowledge_blindspots"] = p["knowledge_blindspots"]
         if kept:
             out["persona"] = kept
+        # Long-term memory — keep only what isn't already in recent_events,
+        # so this section is purely additive context (older recall, not duplication).
+        mems = e.get("memories") or []
+        if mems and recent_event_ids is not None:
+            seen_evids: set[str] = set()
+            kept_mems: list[dict] = []
+            for m in reversed(mems):  # newest first
+                if not isinstance(m, dict):
+                    continue
+                evid = m.get("event_id")
+                if evid in recent_event_ids:
+                    continue  # already shown in recent_events
+                if evid and evid in seen_evids:
+                    continue  # dedupe across multiple memory entries for same event
+                if evid:
+                    seen_evids.add(evid)
+                kept_mems.append({
+                    "tick": m.get("tick"),
+                    "summary": m.get("summary", ""),
+                    "certainty": m.get("certainty", "experienced"),
+                })
+                if len(kept_mems) >= MEMORY_PER_CHAR_LIMIT:
+                    break
+            if kept_mems:
+                out["memories"] = list(reversed(kept_mems))  # back to chronological order
     if e.get("location_id"):
         out["location_id"] = e["location_id"]
     mx, my = e.get("map_x"), e.get("map_y")
@@ -333,9 +361,10 @@ def state_as_prompt(snapshot: dict) -> str:
     quickref = _persona_quickref(snapshot["entities"])
     if quickref:
         parts.append(quickref)
+    recent_event_ids = {ev.get("id") for ev in snapshot.get("recent_events", []) if ev.get("id")}
     parts.append(f"\n## 实体（{len(snapshot['entities'])}）")
     parts.append(json.dumps(
-        [_entity_for_prompt(e) for e in snapshot["entities"]],
+        [_entity_for_prompt(e, recent_event_ids=recent_event_ids) for e in snapshot["entities"]],
         ensure_ascii=False, indent=2,
     ))
     parts.append(f"\n## 近期事件（{len(snapshot['recent_events'])}，按时间升序）")

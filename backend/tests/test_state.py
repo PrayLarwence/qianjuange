@@ -334,3 +334,112 @@ def test_state_as_prompt_renders_all_done():
     assert "剧情进度" in out
     assert "均已标记完成" in out
     assert "当前应推进的节拍" not in out
+
+
+# ---- memories 进 director prompt ----
+
+def _char_dict(eid: str, name: str, mems: list[dict]) -> dict:
+    return {
+        "id": eid, "type": "character", "name": name,
+        "summary": "", "attributes": {}, "state": {},
+        "persona": {"voice": "test"},
+        "memories": mems,
+    }
+
+
+def test_entity_for_prompt_emits_memories_filtered_by_recent_events():
+    """memories 应过滤掉 recent_events 已覆盖的 event_id，避免重复占 token。"""
+    from app.engine.state import _entity_for_prompt
+    e = _char_dict("c1", "甲", [
+        {"event_id": "ev_old1", "tick": 1, "summary": "旧事一", "certainty": "experienced"},
+        {"event_id": "ev_recent", "tick": 5, "summary": "近事", "certainty": "experienced"},
+        {"event_id": "ev_old2", "tick": 2, "summary": "旧事二", "certainty": "experienced"},
+    ])
+    out = _entity_for_prompt(e, recent_event_ids={"ev_recent"})
+    assert "memories" in out
+    summaries = [m["summary"] for m in out["memories"]]
+    assert "近事" not in summaries  # 已在 recent_events 里
+    assert "旧事一" in summaries and "旧事二" in summaries
+
+
+def test_entity_for_prompt_dedupes_same_event_id():
+    """同一 event_id 多条 memory（参与+observe）只保留一条。"""
+    from app.engine.state import _entity_for_prompt
+    e = _char_dict("c1", "甲", [
+        {"event_id": "ev1", "tick": 1, "summary": "我经历的", "certainty": "experienced"},
+        {"event_id": "ev1", "tick": 1, "summary": "我观察的", "certainty": "observed"},
+        {"event_id": "ev2", "tick": 2, "summary": "另一件", "certainty": "experienced"},
+    ])
+    out = _entity_for_prompt(e, recent_event_ids=set())
+    assert len(out["memories"]) == 2  # ev1 只一条
+    evs = {m["summary"] for m in out["memories"]}
+    assert "另一件" in evs
+
+
+def test_entity_for_prompt_caps_at_per_char_limit():
+    """超过 MEMORY_PER_CHAR_LIMIT 应截最近 N 条。"""
+    from app.engine.state import _entity_for_prompt, MEMORY_PER_CHAR_LIMIT
+    mems = [{"event_id": f"e{i}", "tick": i, "summary": f"事{i}",
+             "certainty": "experienced"} for i in range(MEMORY_PER_CHAR_LIMIT + 5)]
+    e = _char_dict("c1", "甲", mems)
+    out = _entity_for_prompt(e, recent_event_ids=set())
+    assert len(out["memories"]) == MEMORY_PER_CHAR_LIMIT
+    # 应保留时间最新的那批：tick 最大的应该在
+    ticks = [m["tick"] for m in out["memories"]]
+    assert max(ticks) == MEMORY_PER_CHAR_LIMIT + 4
+    # 输出应按时间升序（chronological）
+    assert ticks == sorted(ticks)
+
+
+def test_entity_for_prompt_skips_memories_for_non_character():
+    """非 character 实体不应有 memories 字段。"""
+    from app.engine.state import _entity_for_prompt
+    e = {
+        "id": "loc1", "type": "location", "name": "酒馆",
+        "summary": "", "attributes": {}, "state": {},
+        "memories": [{"event_id": "x", "tick": 1, "summary": "?"}],
+    }
+    out = _entity_for_prompt(e, recent_event_ids=set())
+    assert "memories" not in out
+
+
+def test_entity_for_prompt_no_memories_when_none_recorded():
+    """memories 列表为空时不输出 memories 字段。"""
+    from app.engine.state import _entity_for_prompt
+    e = _char_dict("c1", "甲", [])
+    out = _entity_for_prompt(e, recent_event_ids=set())
+    assert "memories" not in out
+
+
+def test_entity_for_prompt_no_memories_when_recent_event_ids_none():
+    """没传 recent_event_ids 时（向后兼容），不输出 memories。"""
+    from app.engine.state import _entity_for_prompt
+    e = _char_dict("c1", "甲", [
+        {"event_id": "e1", "tick": 1, "summary": "x", "certainty": "experienced"},
+    ])
+    out = _entity_for_prompt(e)  # 不传 recent_event_ids
+    assert "memories" not in out
+
+
+def test_state_as_prompt_includes_long_term_memories(db, world_factory):
+    """端到端：建一个角色 + 一些 memories，state_as_prompt 实体段应含历史摘要。"""
+    from app.engine.state import build_state_snapshot, state_as_prompt
+    from app.models import Entity
+    import uuid
+    w, br = world_factory()
+    e = Entity(
+        id=f"ent_{uuid.uuid4().hex[:6]}", branch_id=br.id,
+        type="character", name="林冲", summary="禁军教头",
+        persona={"voice": "沉默克制"},
+        memories=[
+            {"event_id": "ev_long_ago", "tick": -50,
+             "summary": "高俅设计陷我于白虎堂", "certainty": "experienced"},
+        ],
+        alive=1,
+    )
+    db.add(e); db.commit()
+
+    snap = build_state_snapshot(db, w)
+    out = state_as_prompt(snap)
+    # 旧事件早就不在 recent_events 里（recent_events 是空的），所以应被记忆段输出
+    assert "白虎堂" in out
