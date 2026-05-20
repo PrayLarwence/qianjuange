@@ -141,6 +141,22 @@ TOOL_SPECS: list[ToolSpec] = [
         },
     ),
     ToolSpec(
+        name="advance_outline_beat",
+        description=(
+            "宣布当前节拍已经在最近的事件里被满足，把'剧情进度'推到下一拍。"
+            "调用条件：你判断当前节拍 beat 文本描述的核心事件已经在这一轮（或最近几轮）发生。"
+            "副作用：current_index 加 1，旧 current_index 进 completed 列表，写一条系统日志记录这一推进。"
+            "不要在还没真正满足节拍前调用——LLM 跳拍会破坏节奏。"
+            "如果当前已经 all_done 或没有绑定大纲模板，该工具 no-op 安全返回，不会出错。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "note": {"type": "string", "description": "可选的推进说明：你为什么认为这一拍已经完成（一句话）"},
+            },
+        },
+    ),
+    ToolSpec(
         name="end_turn",
         description="结束本轮推演。当你认为本 step 已经完成，调用此工具。",
         parameters={"type": "object", "properties": {}},
@@ -186,6 +202,7 @@ SYSTEM_PROMPT = """你是一个叙事沙盒的世界推演引擎。你的职责�
    - 这一回合产生的事件应朝当前节拍推进，或在剧情已经满足时把它收束。
    - 不要越过当前节拍跳到后面的节拍（会破坏节奏）。
    - 如果当前节拍因为前置条件还没满足而无法推进，可以生成铺垫事件，但要明确仍在为当前节拍做准备，而不是绕开它。
+   - **何时调用 `advance_outline_beat`**：当你为这一轮添加的事件已经把当前节拍 beat 文本描述的核心事件落实了（不是擦边、不是铺垫），就调一次 advance_outline_beat 把进度推到下一拍。一回合最多推 1-2 拍，让叙事有呼吸节奏。如果只是铺垫而不是兑现，**不要**调。
 4. **persona 是硬约束，不是装饰**：
    - "角色人格速查"列出的 drives / voice / blindspots 是每个角色这一回合行为的最高约束。
    - 当你为某个角色 add_event 时，必须能回答："这个事件里他这么做，是出于他的哪个 drive？" 答不出来就不要让他这么做。

@@ -171,3 +171,128 @@ def test_narrate_tool_description_promotes_usage():
     spec = next(t for t in TOOL_SPECS if t.name == "narrate")
     assert "100" in spec.description  # 有字数提示
     assert "2-3" in spec.description or "关键节点" in spec.description
+
+
+# ---- advance_outline_beat ----
+
+def test_advance_outline_beat_tool_registered():
+    """工具应注册并描述清楚触发条件 + no-op 行为。"""
+    from app.engine.tools import TOOL_SPECS
+    spec = next(t for t in TOOL_SPECS if t.name == "advance_outline_beat")
+    assert "current_index" in spec.description
+    assert "no-op" in spec.description.lower() or "noop" in spec.description.lower()
+
+
+def test_advance_outline_beat_noop_without_template(db, world_factory):
+    """无模板时应 ok 返回但 advanced=False，不抛错。"""
+    w, _ = world_factory()
+    res = execute_tool(db, w, "advance_outline_beat", {})
+    assert res["ok"] is True
+    assert res["advanced"] is False
+    assert res["reason"] == "no_template"
+
+
+def test_advance_outline_beat_advances_progress(db, world_factory):
+    """正常推进：current_index 加 1，旧 index 进 completed，写一条系统日志。"""
+    from app.models import WorldTemplate, NarrativeLog
+    import uuid
+    t = WorldTemplate(
+        id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
+        canonical_outline=[{"beat": "开学"}, {"beat": "分院"}, {"beat": "期末"}],
+    )
+    db.add(t); db.commit()
+    w, _ = world_factory()
+    w.template_id = t.id
+    w.outline_progress = {"current_index": 1, "completed": [0]}
+    db.commit()
+
+    res = execute_tool(db, w, "advance_outline_beat", {"note": "魁地奇试训完成"})
+    assert res["advanced"] is True
+    assert res["completed_index"] == 1
+    assert res["new_current_index"] == 2
+
+    db.refresh(w)
+    assert w.outline_progress["current_index"] == 2
+    assert 1 in w.outline_progress["completed"]
+
+    # 系统日志应被写入
+    log = (db.query(NarrativeLog)
+             .filter_by(role="system")
+             .order_by(NarrativeLog.created_at.desc())
+             .first())
+    assert log is not None
+    assert "节拍 #1" in log.text
+    assert "分院" in log.text
+    assert "魁地奇试训完成" in log.text
+
+
+def test_advance_outline_beat_noop_when_all_done(db, world_factory):
+    """current_index 已超出 outline 长度时 noop。"""
+    from app.models import WorldTemplate
+    import uuid
+    t = WorldTemplate(id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
+                      canonical_outline=[{"beat": "唯一"}])
+    db.add(t); db.commit()
+    w, _ = world_factory()
+    w.template_id = t.id
+    w.outline_progress = {"current_index": 5, "completed": [0]}
+    db.commit()
+
+    res = execute_tool(db, w, "advance_outline_beat", {})
+    assert res["advanced"] is False
+    assert res["reason"] == "all_done"
+
+
+def test_advance_outline_beat_marks_all_done_on_last_beat(db, world_factory):
+    """推进最后一拍后 all_done=True。"""
+    from app.models import WorldTemplate
+    import uuid
+    t = WorldTemplate(id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
+                      canonical_outline=[{"beat": "A"}, {"beat": "B"}])
+    db.add(t); db.commit()
+    w, _ = world_factory()
+    w.template_id = t.id
+    w.outline_progress = {"current_index": 1, "completed": [0]}
+    db.commit()
+
+    res = execute_tool(db, w, "advance_outline_beat", {})
+    assert res["advanced"] is True
+    assert res["all_done"] is True
+
+    db.refresh(w)
+    assert w.outline_progress["current_index"] == 2
+
+
+def test_advance_outline_beat_noop_when_template_has_empty_outline(db, world_factory):
+    """模板存在但 canonical_outline 为空时不应崩。"""
+    from app.models import WorldTemplate
+    import uuid
+    t = WorldTemplate(id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
+                      canonical_outline=[])
+    db.add(t); db.commit()
+    w, _ = world_factory()
+    w.template_id = t.id
+    db.commit()
+
+    res = execute_tool(db, w, "advance_outline_beat", {})
+    assert res["advanced"] is False
+    assert res["reason"] == "no_outline"
+
+
+def test_advance_outline_beat_does_not_double_complete(db, world_factory):
+    """如果旧 current_index 已经在 completed 里（边界），不应重复添加。"""
+    from app.models import WorldTemplate
+    import uuid
+    t = WorldTemplate(id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
+                      canonical_outline=[{"beat": "A"}, {"beat": "B"}])
+    db.add(t); db.commit()
+    w, _ = world_factory()
+    w.template_id = t.id
+    # 异常状态：current_index=0 但 0 已在 completed（人为构造）
+    w.outline_progress = {"current_index": 0, "completed": [0]}
+    db.commit()
+
+    execute_tool(db, w, "advance_outline_beat", {})
+    db.refresh(w)
+    assert w.outline_progress["completed"].count(0) == 1  # 仍只一个 0
+    assert w.outline_progress["current_index"] == 1

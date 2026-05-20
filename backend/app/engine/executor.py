@@ -37,6 +37,8 @@ def execute_tool(db: Session, world: World, name: str, args: dict[str, Any]) -> 
         return _branch_world(db, world, args)
     if name == "narrate":
         return _narrate(db, branch_id, world.current_tick, args)
+    if name == "advance_outline_beat":
+        return _advance_outline_beat(db, world, branch_id, args)
     if name == "end_turn":
         return {"ok": True, "ended": True}
     if name == "set_position":
@@ -254,6 +256,58 @@ def _narrate(db: Session, branch_id: str, tick: int, args: dict[str, Any]) -> di
     db.add(log)
     db.commit()
     return {"ok": True, "id": log.id}
+
+
+def _advance_outline_beat(db: Session, world: World, branch_id: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Advance world.outline_progress.current_index by 1, mark old index completed.
+
+    No-ops gracefully when the world has no template, no canonical_outline, or
+    is already past the last beat. Writes a NarrativeLog with role='system' so
+    the UI can surface "AI advanced beat #X".
+    """
+    if not getattr(world, "template_id", None):
+        return {"ok": True, "advanced": False, "reason": "no_template"}
+
+    from app.models import WorldTemplate
+    tpl = db.query(WorldTemplate).filter_by(id=world.template_id).first()
+    beats = (tpl.canonical_outline or []) if tpl else []
+    if not beats:
+        return {"ok": True, "advanced": False, "reason": "no_outline"}
+
+    progress = dict(world.outline_progress or {})
+    cur = int(progress.get("current_index") or 0)
+    completed = list(progress.get("completed") or [])
+
+    if cur >= len(beats):
+        return {"ok": True, "advanced": False, "reason": "all_done", "current_index": cur}
+
+    if cur not in completed:
+        completed.append(cur)
+    progress["completed"] = completed
+    progress["current_index"] = cur + 1
+    world.outline_progress = progress
+
+    finished_beat = beats[cur]
+    if isinstance(finished_beat, dict):
+        beat_text = str(finished_beat.get("beat") or "")
+    else:
+        beat_text = str(finished_beat)
+
+    note = (args.get("note") or "").strip()
+    log_text = f"[剧情进度] 节拍 #{cur} 已完成：{beat_text[:80]}"
+    if note:
+        log_text += f"  —— {note}"
+    log = NarrativeLog(
+        id=_new_id("nar"), branch_id=branch_id, tick=world.current_tick,
+        role="system", text=log_text,
+    )
+    db.add(log)
+    db.commit()
+    return {
+        "ok": True, "advanced": True,
+        "completed_index": cur, "new_current_index": cur + 1,
+        "all_done": (cur + 1) >= len(beats),
+    }
 
 
 def _load_map_or_raise(world: World):

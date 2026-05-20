@@ -257,7 +257,7 @@ def get_timeline(world_id: str, branch_id: str | None = None, db: Session = Depe
             "participants": e.participants, "location_id": e.location_id, "consequences": e.consequences,
         } for e in events],
         "links": [{"cause": l.cause_event_id, "effect": l.effect_event_id, "description": l.description, "weight": l.weight} for l in visible_links],
-        "narration": [{"tick": n.tick, "text": n.text} for n in narration],
+        "narration": [{"tick": n.tick, "text": n.text, "role": n.role or "narrator"} for n in narration],
     }
 
 
