@@ -377,6 +377,23 @@
           </div>
         </div>
         <div class="absolute inset-0 overflow-y-auto p-4 prose prose-invert max-w-none" x-show="viewMode==='narration'">
+          <div x-show="timeline.pacing"
+               class="not-prose mb-3 rounded px-3 py-2 text-xs flex items-center gap-2"
+               :class="{
+                 'border border-emerald-700/40 bg-emerald-950/20 text-emerald-300': timeline.pacing?.level==='comfortable' || timeline.pacing?.level==='done',
+                 'border border-amber-700/40 bg-amber-950/20 text-amber-200': timeline.pacing?.level==='tight' || timeline.pacing?.level==='early_empty' || timeline.pacing?.level==='untimed',
+                 'border border-red-700/50 bg-red-950/30 text-red-200': timeline.pacing?.level==='critical' || timeline.pacing?.level==='endgame',
+               }">
+            <span x-text="{comfortable:'🟢',tight:'🟡',critical:'🔴',endgame:'🔴',done:'✅',early_empty:'💡',untimed:'⚠️'}[timeline.pacing?.level] || '•'"></span>
+            <span class="font-medium uppercase tracking-wide opacity-80" x-text="timeline.pacing?.level"></span>
+            <span class="opacity-60" x-show="timeline.pacing?.progress_pct !== undefined"
+                  x-text="'进度 ' + timeline.pacing.progress_pct + '%'"></span>
+            <span class="opacity-60" x-show="timeline.pacing?.remaining_beats !== undefined"
+                  x-text="'剩 ' + timeline.pacing.remaining_beats + ' 拍'"></span>
+            <span class="opacity-60" x-text="'未收钩子 ' + (timeline.pacing?.open_threads || 0) + ' 条'"></span>
+            <span class="flex-1 text-right opacity-75 truncate" x-text="timeline.pacing?.advice"
+                  :title="timeline.pacing?.advice"></span>
+          </div>
           <div x-show="(timeline.plot_threads||[]).some(t=>t.status==='open')"
                class="not-prose mb-4 rounded border border-amber-700/40 bg-amber-950/20 p-3">
             <div class="text-xs text-amber-300/80 font-semibold mb-1.5">未收的钩子

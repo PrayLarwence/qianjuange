@@ -255,6 +255,9 @@ def get_timeline(world_id: str, branch_id: str | None = None, db: Session = Depe
                  .filter_by(branch_id=bid)
                  .order_by(PlotThread.opened_tick)
                  .all())
+    from ..engine.state import _load_outline_block, _compute_pacing_budget
+    open_count = sum(1 for t in threads if t.status == "open")
+    pacing = _compute_pacing_budget(_load_outline_block(db, world), open_count)
     return {
         "events": [{
             "id": e.id, "tick": e.tick, "title": e.title, "description": e.description,
@@ -268,6 +271,7 @@ def get_timeline(world_id: str, branch_id: str | None = None, db: Session = Depe
             "resolution": t.resolution or "",
             "related_entity_ids": t.related_entity_ids or [],
         } for t in threads],
+        "pacing": pacing,  # null 当无大纲且无钩子
     }
 
 

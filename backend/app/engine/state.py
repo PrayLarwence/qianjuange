@@ -274,7 +274,71 @@ def build_state_snapshot(db: Session, world: World, max_events: int = 30, max_en
             }
             for t in open_threads
         ]
+    pacing = _compute_pacing_budget(outline_block, len(open_threads))
+    if pacing is not None:
+        snapshot["pacing_budget"] = pacing
     return snapshot
+
+
+def _compute_pacing_budget(outline_block: Optional[dict], open_thread_count: int) -> Optional[dict]:
+    """Derive a pacing/budget summary for the LLM.
+
+    Logic: when outline_block is present, use beat progress as the time axis.
+    The 'tightness' compares remaining beats against open threads — if there
+    are more open threads than remaining beats, every remaining beat needs to
+    carry thread closure on top of plot advancement.
+
+    Returns None when there's no outline to anchor budget to (no template).
+    """
+    if outline_block is None:
+        if open_thread_count > 0:
+            return {
+                "level": "untimed",
+                "open_threads": open_thread_count,
+                "advice": "没有大纲框定结尾，注意不要无限累积钩子。",
+            }
+        return None
+
+    n = len(outline_block.get("beats") or [])
+    cur = int(outline_block.get("current_index") or 0)
+    remaining_beats = max(0, n - cur)
+    progress_pct = int(round(cur * 100 / n)) if n > 0 else 0
+
+    if outline_block.get("all_done"):
+        if open_thread_count > 0:
+            level = "endgame"
+            advice = (f"大纲已 all_done，但还有 {open_thread_count} 条钩子未收。"
+                      "本轮必须用收尾事件兑现这些钩子并 close_plot_thread——"
+                      "不要再开新钩子，不要拖延。")
+        else:
+            level = "done"
+            advice = "大纲已 all_done 且无未收钩子，可以从容写收束章节或开放结局。"
+    elif remaining_beats <= open_thread_count:
+        level = "critical"
+        advice = (f"剩 {remaining_beats} 拍要兑现 {open_thread_count} 条钩子——节奏紧迫。"
+                  "本轮**优先**用 close_plot_thread 收钩子，**禁止**开新钩子，"
+                  "事件设计上应让多条线同步收尾（一个事件兑现多条钩子最理想）。")
+    elif progress_pct >= 60 and open_thread_count >= 3:
+        level = "tight"
+        advice = (f"已推进 {progress_pct}%，还有 {open_thread_count} 条钩子悬着——"
+                  "进入收尾阶段。本轮如果有钩子接近兑现条件就主动收，"
+                  "新增钩子要克制（仅当大纲明示新伏笔时才开）。")
+    elif progress_pct < 30 and open_thread_count == 0:
+        level = "early_empty"
+        advice = (f"剧情才推进 {progress_pct}%，目前一条钩子也没埋。"
+                  "如果接下来的事件里有自然的悬念点（誓言、谜团、未履承诺），"
+                  "用 open_plot_thread 显式登记，让故事有线索网。")
+    else:
+        level = "comfortable"
+        advice = f"剧情进度 {progress_pct}%，{open_thread_count} 条钩子在线，节奏宽裕。"
+
+    return {
+        "level": level,
+        "progress_pct": progress_pct,
+        "remaining_beats": remaining_beats,
+        "open_threads": open_thread_count,
+        "advice": advice,
+    }
 
 
 def _persona_quickref(entities: list[dict]) -> str:
@@ -398,6 +462,22 @@ def state_as_prompt(snapshot: dict) -> str:
             stale = "（拖了 {} tick 了）".format(age) if age >= 5 else ""
             parts.append(f"- [{t['id']}] {t['title']}{stale}")
             parts.append(f"  {t['summary']}")
+    pacing = snapshot.get("pacing_budget")
+    if pacing is not None:
+        level = pacing.get("level", "")
+        emoji = {
+            "comfortable": "🟢", "tight": "🟡", "critical": "🔴",
+            "endgame": "🔴", "done": "✅", "early_empty": "💡", "untimed": "⚠️",
+        }.get(level, "•")
+        parts.append(f"\n## 节奏与预算 {emoji}")
+        meta_bits = []
+        if "progress_pct" in pacing:
+            meta_bits.append(f"进度 {pacing['progress_pct']}%")
+        if "remaining_beats" in pacing:
+            meta_bits.append(f"剩 {pacing['remaining_beats']} 拍")
+        meta_bits.append(f"未收钩子 {pacing.get('open_threads', 0)} 条")
+        parts.append("状态：" + "  |  ".join(meta_bits))
+        parts.append(pacing.get("advice", ""))
     parts.append("\n## 最近叙事")
     parts.append("\n---\n".join(snapshot["recent_narration"]))
     return "\n".join(parts)

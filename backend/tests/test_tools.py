@@ -448,3 +448,112 @@ def test_system_prompt_documents_thread_workflow():
     assert "close_plot_thread" in SYSTEM_PROMPT
     assert "未收的剧情钩子" in SYSTEM_PROMPT  # 第 1 条段落清单已更新
     assert "未解决的因果钩子" not in SYSTEM_PROMPT  # 旧的撒谎措辞已删
+
+
+# ---- pacing budget ----
+
+def _bind_template(db, w, beats, current_index=0):
+    from app.models import WorldTemplate
+    import uuid
+    t = WorldTemplate(id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
+                      canonical_outline=[{"beat": b} for b in beats])
+    db.add(t); db.commit()
+    w.template_id = t.id
+    w.outline_progress = {"current_index": current_index, "completed": list(range(current_index))}
+    db.commit()
+
+
+def test_pacing_omitted_when_no_outline_and_no_threads(db, world_factory):
+    from app.engine.state import build_state_snapshot, state_as_prompt
+    w, _ = world_factory()
+    snap = build_state_snapshot(db, w)
+    assert "pacing_budget" not in snap
+    assert "节奏与预算" not in state_as_prompt(snap)
+
+
+def test_pacing_untimed_when_threads_but_no_outline(db, world_factory):
+    """无大纲但有钩子时仍提示注意，不让钩子无限累积。"""
+    from app.engine.state import build_state_snapshot
+    w, _ = world_factory()
+    execute_tool(db, w, "open_plot_thread", {"title": "t", "summary": "s"})
+    snap = build_state_snapshot(db, w)
+    assert snap["pacing_budget"]["level"] == "untimed"
+
+
+def test_pacing_critical_when_threads_exceed_remaining_beats(db, world_factory):
+    """剩 1 拍但有 3 条钩子 → critical，prompt 必须出现'禁止开新钩子'。"""
+    from app.engine.state import build_state_snapshot, state_as_prompt
+    w, _ = world_factory()
+    _bind_template(db, w, ["A", "B", "C"], current_index=2)  # 剩 1 拍
+    for i in range(3):
+        execute_tool(db, w, "open_plot_thread", {"title": f"t{i}", "summary": "s"})
+    snap = build_state_snapshot(db, w)
+    p = snap["pacing_budget"]
+    assert p["level"] == "critical"
+    assert p["remaining_beats"] == 1
+    assert p["open_threads"] == 3
+    out = state_as_prompt(snap)
+    assert "节奏与预算" in out
+    assert "禁止" in out
+
+
+def test_pacing_endgame_when_all_done_with_open_threads(db, world_factory):
+    from app.engine.state import build_state_snapshot
+    w, _ = world_factory()
+    _bind_template(db, w, ["A", "B"], current_index=2)  # all_done
+    execute_tool(db, w, "open_plot_thread", {"title": "t", "summary": "s"})
+    snap = build_state_snapshot(db, w)
+    assert snap["pacing_budget"]["level"] == "endgame"
+
+
+def test_pacing_done_when_all_done_no_threads(db, world_factory):
+    from app.engine.state import build_state_snapshot
+    w, _ = world_factory()
+    _bind_template(db, w, ["A", "B"], current_index=2)
+    snap = build_state_snapshot(db, w)
+    assert snap["pacing_budget"]["level"] == "done"
+
+
+def test_pacing_tight_when_late_with_many_threads(db, world_factory):
+    """已推 60%+ 且有 3+ 钩子，但还没到剩拍 < 钩子的程度 → tight。"""
+    from app.engine.state import build_state_snapshot
+    w, _ = world_factory()
+    # 10 拍推到第 6 → 60%，剩 4 拍，开 3 条钩子（remaining > threads → 不会 critical）
+    _bind_template(db, w, [f"b{i}" for i in range(10)], current_index=6)
+    for i in range(3):
+        execute_tool(db, w, "open_plot_thread", {"title": f"t{i}", "summary": "s"})
+    snap = build_state_snapshot(db, w)
+    assert snap["pacing_budget"]["level"] == "tight"
+    assert snap["pacing_budget"]["progress_pct"] == 60
+
+
+def test_pacing_early_empty_nudges_to_open_threads(db, world_factory):
+    """早期 0 钩子时给出'埋钩子'提示。"""
+    from app.engine.state import build_state_snapshot, state_as_prompt
+    w, _ = world_factory()
+    _bind_template(db, w, [f"b{i}" for i in range(10)], current_index=1)  # 10%
+    snap = build_state_snapshot(db, w)
+    assert snap["pacing_budget"]["level"] == "early_empty"
+    assert "open_plot_thread" in state_as_prompt(snap)
+
+
+def test_pacing_comfortable_default(db, world_factory):
+    from app.engine.state import build_state_snapshot
+    w, _ = world_factory()
+    _bind_template(db, w, [f"b{i}" for i in range(10)], current_index=3)  # 30%
+    execute_tool(db, w, "open_plot_thread", {"title": "t", "summary": "s"})
+    snap = build_state_snapshot(db, w)
+    assert snap["pacing_budget"]["level"] == "comfortable"
+
+
+def test_pacing_section_renders_meta_line(db, world_factory):
+    """'状态：' 行应该带上进度/剩拍/钩子数三个字段。"""
+    from app.engine.state import build_state_snapshot, state_as_prompt
+    w, _ = world_factory()
+    _bind_template(db, w, ["a", "b", "c", "d"], current_index=2)
+    execute_tool(db, w, "open_plot_thread", {"title": "t", "summary": "s"})
+    out = state_as_prompt(build_state_snapshot(db, w))
+    assert "状态：" in out
+    assert "进度 50%" in out
+    assert "剩 2 拍" in out
+    assert "未收钩子 1 条" in out
