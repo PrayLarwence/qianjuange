@@ -19,6 +19,19 @@ def init_db() -> None:
     from . import world  # noqa: F401  ensure models are registered
     Base.metadata.create_all(bind=engine)
     _migrate()
+    _seed_builtin_styles()
+
+
+def _seed_builtin_styles() -> None:
+    """启动时 upsert 8 个内置 StyleProfile。"""
+    from ..engine.style_seeds import seed_builtin_styles
+    db = SessionLocal()
+    try:
+        seed_builtin_styles(db)
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
 
 
 def _migrate() -> None:
@@ -83,6 +96,29 @@ def _migrate() -> None:
                 conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN map_meta TEXT DEFAULT '{}'")
             if wcols and "outline" not in wcols:
                 conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN outline TEXT DEFAULT ''")
+            # 阶段 0：多 agent 管线相关字段
+            if wcols and "style_profile_id" not in wcols:
+                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN style_profile_id VARCHAR")
+            if wcols and "embedding_provider" not in wcols:
+                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN embedding_provider VARCHAR DEFAULT ''")
+            if wcols and "author_model_override" not in wcols:
+                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN author_model_override VARCHAR DEFAULT ''")
+            if wcols and "editor_model_override" not in wcols:
+                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN editor_model_override VARCHAR DEFAULT ''")
+            if wcols and "reader_model_override" not in wcols:
+                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN reader_model_override VARCHAR DEFAULT ''")
+        except Exception:
+            pass
+        # 阶段 0：NarrativeLog 加多 agent 字段
+        try:
+            ncols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(narrative_logs)").fetchall()}
+            if ncols and "revision_index" not in ncols:
+                conn.exec_driver_sql("ALTER TABLE narrative_logs ADD COLUMN revision_index INTEGER DEFAULT 0")
+            if ncols and "parent_log_id" not in ncols:
+                conn.exec_driver_sql("ALTER TABLE narrative_logs ADD COLUMN parent_log_id VARCHAR")
+            # 现有记录的 role 保持不动（兼容老的 'narrator'/'system'）；新管线写入会用
+            # 'director_draft' / 'author_final' / 'editor_critique' / 'reader_feedback'。
+            # 显式记录的索引 sqlalchemy create_all 已建。
         except Exception:
             pass
 

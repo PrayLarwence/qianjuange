@@ -22,6 +22,11 @@ class World(Base):
     map_h = Column(Integer, default=0)
     map_seed = Column(Integer, default=0)
     map_meta = Column(JSON, default=dict)
+    style_profile_id = Column(String, ForeignKey("style_profiles.id", use_alter=True, name="fk_world_style_profile"), nullable=True)
+    embedding_provider = Column(String, default="")  # '' | 'local_bge' | 'zhipu' | 'siliconflow'
+    author_model_override = Column(String, default="")
+    editor_model_override = Column(String, default="")
+    reader_model_override = Column(String, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
 
     branches = relationship("Branch", back_populates="world", foreign_keys="Branch.world_id")
@@ -107,8 +112,20 @@ class NarrativeLog(Base):
     branch_id = Column(String, ForeignKey("branches.id"), nullable=False, index=True)
     tick = Column(Integer, nullable=False)
     role = Column(String, default="narrator")
+    # 新增：多 agent 管线下的稿件分类
+    # 'director_draft' (Director 输出的粗稿，将被 Author 改写)
+    # 'author_final'   (Author 改写后的定稿，用户实际看的)
+    # 'editor_critique'(Editor 的评注，渲染时通常隐藏)
+    # 'reader_feedback'(Reader Critic 的读后感，下回合喂给 Director)
+    # 旧值 'narrator' / 'system' 等保留兼容
     text = Column(Text, default="")
+    revision_index = Column(Integer, default=0)  # 同一 (tick, role) 的多版本号
+    parent_log_id = Column(String, ForeignKey("narrative_logs.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+Index("ix_narrative_logs_branch_tick", NarrativeLog.branch_id, NarrativeLog.tick)
+Index("ix_narrative_logs_role", NarrativeLog.role)
 
 
 class ChapterMarker(Base):
@@ -195,4 +212,92 @@ class ScanRun(Base):
     issue_count = Column(Integer, default=0)
     status = Column(String, default="completed")
     error = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ==== 阶段 0 新表（先建好 schema，后续阶段才开始写入） ====
+
+
+class StyleProfile(Base):
+    """小说风格预设。kind='builtin' 全局共享；'custom' 绑 world_id。
+
+    spec_text 是给 Author 的风格指令；sample_paragraphs 是范文片段（比 spec_text
+    重要，是真正的"风格指纹"原料）；frozen=1 表示已锁定不允许修改（首次满意后
+    用户冻结）。
+    """
+    __tablename__ = "style_profiles"
+    id = Column(String, primary_key=True)
+    world_id = Column(String, ForeignKey("worlds.id"), nullable=True, index=True)
+    name = Column(String, nullable=False)
+    kind = Column(String, default="builtin")  # 'builtin' | 'custom'
+    category = Column(String, default="")  # 'narrative' | 'genre' | 'special'
+    description = Column(Text, default="")  # 一行描述，UI 卡片用
+    spec_text = Column(Text, default="")  # 给 Author 的完整风格 spec
+    sample_paragraphs = Column(JSON, default=list)  # [{title, text}] 范文片段
+    frozen = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+Index("ix_style_profiles_kind", StyleProfile.kind)
+
+
+class EntitySnapshot(Base):
+    """实体在某时间点的快照。ChapterMarker 触发时给重要 entity 拍照，
+    用于 Author 写后期章节时引用 '初登场 / 上一章 / 当前' 三版人物。
+
+    阶段 0 先建表不写入；B3 阶段才正式启用。
+    """
+    __tablename__ = "entity_snapshots"
+    id = Column(String, primary_key=True)
+    entity_id = Column(String, ForeignKey("entities.id"), nullable=False, index=True)
+    branch_id = Column(String, ForeignKey("branches.id"), nullable=False, index=True)
+    chapter_marker_id = Column(String, ForeignKey("chapter_markers.id"), nullable=True)
+    tick = Column(Integer, nullable=False)
+    persona_snapshot = Column(JSON, default=dict)
+    attributes_snapshot = Column(JSON, default=dict)
+    state_snapshot = Column(JSON, default=dict)
+    summary_snapshot = Column(Text, default="")  # 当时角色简介
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+Index("ix_entity_snapshots_entity_tick", EntitySnapshot.entity_id, EntitySnapshot.tick)
+
+
+class EmbeddingChunk(Base):
+    """段落向量索引。每段 author_final 异步 embed 后入库；后期 Author 写新段
+    用 cosine 召回 top-k 相关历史段。
+
+    embedding 字段存原始 float32 字节流；维度由 embedding_model 决定。阶段 0
+    建表不写入；B2 阶段实装。
+    """
+    __tablename__ = "embedding_chunks"
+    id = Column(String, primary_key=True)
+    world_id = Column(String, ForeignKey("worlds.id"), nullable=False, index=True)
+    branch_id = Column(String, ForeignKey("branches.id"), nullable=False, index=True)
+    log_id = Column(String, ForeignKey("narrative_logs.id"), nullable=True, index=True)
+    chapter_marker_id = Column(String, ForeignKey("chapter_markers.id"), nullable=True)
+    tick = Column(Integer, default=0)
+    text = Column(Text, default="")
+    embedding = Column(Text, default="")  # JSON-encoded list[float]，简化跨环境兼容
+    embedding_model = Column(String, default="")
+    dim = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+Index("ix_embedding_chunks_world_chapter", EmbeddingChunk.world_id, EmbeddingChunk.chapter_marker_id)
+
+
+class ChapterSummary(Base):
+    """章节级摘要。每个 ChapterMarker 触发时异步生成 200 字摘要，进 Director/
+    Author prompt 的 '章节摘要列表' 段。阶段 0 建表，B1 阶段填充。
+    """
+    __tablename__ = "chapter_summaries"
+    id = Column(String, primary_key=True)
+    chapter_marker_id = Column(String, ForeignKey("chapter_markers.id"), nullable=False, index=True)
+    branch_id = Column(String, ForeignKey("branches.id"), nullable=False, index=True)
+    summary = Column(Text, default="")
+    key_event_ids = Column(JSON, default=list)
+    word_count = Column(Integer, default=0)
+    model_used = Column(String, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
