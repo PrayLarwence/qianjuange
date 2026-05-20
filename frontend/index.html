@@ -2048,6 +2048,69 @@
           class="w-full miku-textarea resize-none"></textarea>
       </div>
 
+      <div class="border-t pt-4" style="border-color: var(--bd-1);">
+        <div class="flex items-center justify-between mb-2">
+          <label class="text-xs text-zinc-400 flex items-center gap-1">
+            <span style="color: var(--miku);">✒</span>写作风格
+            <span class="text-zinc-600 ml-1">推演时 Author 会按所选风格改写正文</span>
+          </label>
+          <button x-show="settingsDraft.style_profile_id"
+            @click="settingsDraft.style_profile_id = ''"
+            class="text-xs text-zinc-500 hover:text-zinc-300">取消选择</button>
+        </div>
+
+        <div x-show="!stylesAvailable.length" class="text-xs text-zinc-600 italic py-3 text-center">
+          风格档案加载中…
+        </div>
+
+        <div x-show="stylesAvailable.length" class="grid grid-cols-2 md:grid-cols-3 gap-2">
+          <div class="rounded p-2.5 border cursor-pointer transition"
+            @click="settingsDraft.style_profile_id = ''"
+            :class="!settingsDraft.style_profile_id ? 'border-emerald-600 bg-emerald-900/20' : 'border-zinc-700 hover:border-zinc-500'"
+            style="background: var(--bg-2);">
+            <div class="text-sm font-medium flex items-center gap-1">
+              <span x-show="!settingsDraft.style_profile_id" class="text-emerald-400">✓</span>
+              <span>不启用</span>
+            </div>
+            <div class="text-[11px] text-zinc-500 mt-1 leading-snug">Director 写什么就是什么，不经 Author 改写</div>
+          </div>
+
+          <template x-for="sp in stylesAvailable" :key="sp.id">
+            <div class="rounded p-2.5 border cursor-pointer transition"
+              @click="settingsDraft.style_profile_id = sp.id"
+              :class="settingsDraft.style_profile_id === sp.id ? 'border-emerald-600 bg-emerald-900/20' : 'border-zinc-700 hover:border-zinc-500'"
+              style="background: var(--bg-2);"
+              :title="sp.description">
+              <div class="text-sm font-medium flex items-center gap-1">
+                <span x-show="settingsDraft.style_profile_id === sp.id" class="text-emerald-400">✓</span>
+                <span x-text="sp.name"></span>
+                <span x-show="sp.kind === 'custom'" class="text-[10px] px-1 rounded bg-purple-900/40 text-purple-300 ml-auto">自建</span>
+              </div>
+              <div class="text-[11px] text-zinc-500 mt-1 leading-snug line-clamp-2" x-text="sp.description"></div>
+              <button x-show="sp.id"
+                @click.stop="previewStyleSpec(sp.id)"
+                class="text-[10px] text-zinc-500 hover:text-zinc-300 mt-1.5">查看示例 →</button>
+            </div>
+          </template>
+        </div>
+
+        <div x-show="stylePreview.id" class="mt-3 rounded border p-3 text-xs"
+          style="background: var(--bg-2); border-color: var(--bd-1);">
+          <div class="flex items-center justify-between mb-2">
+            <div class="font-medium" x-text="stylePreview.name"></div>
+            <button @click="stylePreview = { id: '', name: '', spec_text: '', samples: [] }"
+              class="text-zinc-500 hover:text-zinc-300">✕</button>
+          </div>
+          <div class="text-zinc-400 mb-2 whitespace-pre-wrap" x-text="stylePreview.spec_text"></div>
+          <template x-for="s in stylePreview.samples" :key="s.title || s.text.slice(0,8)">
+            <div class="border-t pt-2 mt-2" style="border-color: var(--bd-1);">
+              <div class="text-zinc-500 text-[10px] mb-1" x-text="s.title || ''"></div>
+              <div class="text-zinc-300 leading-relaxed whitespace-pre-wrap" x-text="s.text"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+
     </div>
     <div class="border-t px-5 py-3 flex items-center justify-between gap-3" style="border-color: var(--bd-1);">
       <div class="text-xs text-zinc-500">这些规则会被注入 AI 推演、调和、角色对话的系统提示</div>

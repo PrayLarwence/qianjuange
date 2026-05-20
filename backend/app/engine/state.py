@@ -225,6 +225,7 @@ def build_state_snapshot(db: Session, world: World, max_events: int = 30, max_en
             "current_tick": world.current_tick,
             "branch_id": branch_id,
             "rules": world.rules or {},
+            "style_profile_id": world.style_profile_id or "",
         },
         "entities": [_entity_full(e) for e in entities],
         "recent_events": [

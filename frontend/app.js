@@ -81,8 +81,10 @@ function sandbox() {
     searchSelectedIndex: 0,
 
     showWorldSettings: false,
-    settingsDraft: { name: '', description: '', outline: '', core_rules: [], forbidden: [], tone: '', language: '', notes: '' },
+    settingsDraft: { name: '', description: '', outline: '', core_rules: [], forbidden: [], tone: '', language: '', notes: '', style_profile_id: '' },
     settingsSaving: false,
+    stylesAvailable: [],
+    stylePreview: { id: '', name: '', spec_text: '', samples: [] },
 
     showExplore: false,
     exploreVariants: [{ label: 'A', directive: '' }, { label: 'B', directive: '' }],
@@ -1885,8 +1887,41 @@ function sandbox() {
         tone: r.tone || '',
         language: r.language || '',
         notes: r.notes || '',
+        style_profile_id: w.style_profile_id || '',
       };
+      this.stylePreview = { id: '', name: '', spec_text: '', samples: [] };
       this.showWorldSettings = true;
+      // 异步加载风格列表（不阻塞弹窗显示）
+      this.loadStyles();
+    },
+
+    async loadStyles() {
+      try {
+        const r = await this.api('GET', '/style_profiles');
+        this.stylesAvailable = r.profiles || [];
+      } catch (e) {
+        console.error('loadStyles', e);
+        this.stylesAvailable = [];
+      }
+    },
+
+    async previewStyleSpec(styleId) {
+      if (!styleId) return;
+      // 第二次点同一卡片 = 关闭预览
+      if (this.stylePreview.id === styleId) {
+        this.stylePreview = { id: '', name: '', spec_text: '', samples: [] };
+        return;
+      }
+      try {
+        const sp = await this.api('GET', `/style_profiles/${styleId}`);
+        this.stylePreview = {
+          id: sp.id, name: sp.name,
+          spec_text: sp.spec_text || '',
+          samples: Array.isArray(sp.sample_paragraphs) ? sp.sample_paragraphs : [],
+        };
+      } catch (e) {
+        console.error('previewStyle', e);
+      }
     },
 
     addRuleLine(field) {
@@ -1919,6 +1954,7 @@ function sandbox() {
           description: this.settingsDraft.description || '',
           outline: this.settingsDraft.outline || '',
           rules,
+          style_profile_id: this.settingsDraft.style_profile_id || '',
         });
         this.showWorldSettings = false;
         this.flashToast('已保存世界设置');

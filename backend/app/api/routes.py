@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from ..engine import run_step, run_auto, run_reconcile, build_state_snapshot, CancelledError, create_job, get_job, cancel_job, capture_branch_snapshot, restore_branch_snapshot
 from ..engine.tools import render_world_rules
 from ..engine.state import state_as_prompt
-from ..models import get_db, SessionLocal, World, Branch, Entity, Event, CausalLink, NarrativeLog, Snapshot, ChapterMarker, WorldTemplate, ConsistencyIssue, ScanRun, PlotThread
+from ..models import get_db, SessionLocal, World, Branch, Entity, Event, CausalLink, NarrativeLog, Snapshot, ChapterMarker, WorldTemplate, ConsistencyIssue, ScanRun, PlotThread, StyleProfile
 from ..providers import (
     get_provider, load_config, save_config, mask, PROVIDER_CLASSES,
     Message,
@@ -882,6 +882,9 @@ class WorldUpdate(BaseModel):
     description: str | None = None
     outline: str | None = None
     rules: dict[str, Any] | None = None
+    # A4: 写作风格绑定。空字符串 / null 表示解绑（Author 不介入）。
+    # 前端要解绑时传空字符串；不传字段表示不修改。
+    style_profile_id: str | None = None
 
 
 @router.patch("/worlds/{world_id}")
@@ -897,12 +900,23 @@ def update_world(world_id: str, payload: WorldUpdate, db: Session = Depends(get_
         world.outline = payload.outline
     if payload.rules is not None:
         world.rules = payload.rules
+    # 语义：None=不修改；""=解绑；非空字符串=绑定到该 id（要校验存在）
+    if payload.style_profile_id is not None:
+        sid = payload.style_profile_id.strip()
+        if sid:
+            sp = db.query(StyleProfile).filter_by(id=sid).first()
+            if not sp:
+                raise HTTPException(400, f"style_profile not found: {sid}")
+            world.style_profile_id = sid
+        else:
+            world.style_profile_id = None
     db.commit()
     return {
         "ok": True,
         "id": world.id, "name": world.name,
         "description": world.description, "outline": world.outline or "",
         "rules": world.rules or {},
+        "style_profile_id": world.style_profile_id,
     }
 
 
@@ -1382,6 +1396,48 @@ def set_relationship(world_id: str, payload: SetRelationRequest, db: Session = D
         ent.attributes = attrs
     db.commit()
     return {"ok": True, "a_id": a.id, "b_id": b.id, "label": label}
+
+
+# ============== style profiles (A4) ==============
+
+@router.get("/style_profiles")
+def list_style_profiles(db: Session = Depends(get_db)):
+    """列所有风格档案。前端在'世界设置'弹窗里展示给用户选择。
+
+    返回 builtin（系统内置）+ custom（用户自建）两组。spec_text 不返回——
+    前端只需要展示用元数据，需要看 spec 再单独 GET /style_profiles/{id}。
+    """
+    rows = db.query(StyleProfile).order_by(StyleProfile.kind.asc(), StyleProfile.name.asc()).all()
+    return {
+        "profiles": [
+            {
+                "id": r.id,
+                "name": r.name,
+                "description": r.description or "",
+                "kind": r.kind or "builtin",
+                "category": r.category or "",
+                "frozen": bool(r.frozen),
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.get("/style_profiles/{style_id}")
+def get_style_profile(style_id: str, db: Session = Depends(get_db)):
+    r = db.query(StyleProfile).filter_by(id=style_id).first()
+    if not r:
+        raise HTTPException(404, "style_profile not found")
+    return {
+        "id": r.id,
+        "name": r.name,
+        "description": r.description or "",
+        "kind": r.kind or "builtin",
+        "category": r.category or "",
+        "spec_text": r.spec_text or "",
+        "sample_paragraphs": r.sample_paragraphs or [],
+        "frozen": bool(r.frozen),
+    }
 
 
 # ============== chapter markers ==============
