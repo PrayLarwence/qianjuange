@@ -12,7 +12,7 @@ function sandbox() {
     currentBranchId: '',
     world: null,
     entities: [],
-    timeline: { events: [], links: [], narration: [] },
+    timeline: { events: [], links: [], narration: [], plot_threads: [] },
     selectedEntity: null,
     viewMode: 'graph',
     cy: null,
@@ -405,7 +405,7 @@ function sandbox() {
 
     _resetWorldScopedState() {
       this.entities = [];
-      this.timeline = { events: [], links: [], narration: [] };
+      this.timeline = { events: [], links: [], narration: [], plot_threads: [] };
       this.selectedEntity = null;
       this.charViewEntity = null;
       this.charView = null;

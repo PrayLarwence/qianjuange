@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from ..engine import run_step, run_auto, run_reconcile, build_state_snapshot, CancelledError, create_job, get_job, cancel_job, capture_branch_snapshot, restore_branch_snapshot
 from ..engine.tools import render_world_rules
 from ..engine.state import state_as_prompt
-from ..models import get_db, SessionLocal, World, Branch, Entity, Event, CausalLink, NarrativeLog, Snapshot, ChapterMarker, WorldTemplate, ConsistencyIssue, ScanRun
+from ..models import get_db, SessionLocal, World, Branch, Entity, Event, CausalLink, NarrativeLog, Snapshot, ChapterMarker, WorldTemplate, ConsistencyIssue, ScanRun, PlotThread
 from ..providers import (
     get_provider, load_config, save_config, mask, PROVIDER_CLASSES,
     Message,
@@ -251,6 +251,10 @@ def get_timeline(world_id: str, branch_id: str | None = None, db: Session = Depe
     links = db.query(CausalLink).filter_by(branch_id=bid).all()
     visible_links = [l for l in links if l.cause_event_id in event_ids and l.effect_event_id in event_ids]
     narration = db.query(NarrativeLog).filter_by(branch_id=bid).order_by(NarrativeLog.tick).all()
+    threads = (db.query(PlotThread)
+                 .filter_by(branch_id=bid)
+                 .order_by(PlotThread.opened_tick)
+                 .all())
     return {
         "events": [{
             "id": e.id, "tick": e.tick, "title": e.title, "description": e.description,
@@ -258,6 +262,12 @@ def get_timeline(world_id: str, branch_id: str | None = None, db: Session = Depe
         } for e in events],
         "links": [{"cause": l.cause_event_id, "effect": l.effect_event_id, "description": l.description, "weight": l.weight} for l in visible_links],
         "narration": [{"tick": n.tick, "text": n.text, "role": n.role or "narrator"} for n in narration],
+        "plot_threads": [{
+            "id": t.id, "title": t.title, "summary": t.summary, "status": t.status,
+            "opened_tick": t.opened_tick, "closed_tick": t.closed_tick,
+            "resolution": t.resolution or "",
+            "related_entity_ids": t.related_entity_ids or [],
+        } for t in threads],
     }
 
 

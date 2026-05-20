@@ -296,3 +296,155 @@ def test_advance_outline_beat_does_not_double_complete(db, world_factory):
     db.refresh(w)
     assert w.outline_progress["completed"].count(0) == 1  # 仍只一个 0
     assert w.outline_progress["current_index"] == 1
+
+
+# ---- plot_threads ----
+
+def test_plot_thread_tools_registered():
+    from app.engine.tools import TOOL_SPECS
+    names = {t.name for t in TOOL_SPECS}
+    assert "open_plot_thread" in names
+    assert "close_plot_thread" in names
+    op = next(t for t in TOOL_SPECS if t.name == "open_plot_thread")
+    cl = next(t for t in TOOL_SPECS if t.name == "close_plot_thread")
+    # required 字段约束
+    assert "title" in op.parameters["required"]
+    assert "summary" in op.parameters["required"]
+    assert "thread_id" in cl.parameters["required"]
+
+
+def test_open_plot_thread_creates_row_and_logs(db, world_factory):
+    from app.models import PlotThread, NarrativeLog
+    w, _ = world_factory()
+    w.current_tick = 7
+    db.commit()
+
+    res = execute_tool(db, w, "open_plot_thread", {
+        "title": "林冲未报高俅之仇",
+        "summary": "林冲在白虎堂被陷害发誓必杀，但尚未行动",
+        "related_entity_ids": ["c_linchong", "c_gaoqiu"],
+    })
+    assert res["ok"] is True and res["status"] == "open"
+    th = db.query(PlotThread).filter_by(id=res["id"]).first()
+    assert th is not None
+    assert th.status == "open"
+    assert th.opened_tick == 7
+    assert th.related_entity_ids == ["c_linchong", "c_gaoqiu"]
+
+    log = db.query(NarrativeLog).filter_by(role="system").first()
+    assert log is not None
+    assert "钩子开启" in log.text and "林冲" in log.text
+
+
+def test_open_plot_thread_requires_title_and_summary(db, world_factory):
+    from app.engine.executor import ToolError
+    import pytest
+    w, _ = world_factory()
+    with pytest.raises(ToolError):
+        execute_tool(db, w, "open_plot_thread", {"title": "x"})  # 没 summary
+    with pytest.raises(ToolError):
+        execute_tool(db, w, "open_plot_thread", {"summary": "x"})  # 没 title
+
+
+def test_close_plot_thread_marks_closed_and_records_resolution(db, world_factory):
+    from app.models import PlotThread, NarrativeLog
+    w, _ = world_factory()
+    w.current_tick = 3
+    db.commit()
+    o = execute_tool(db, w, "open_plot_thread", {"title": "t", "summary": "s"})
+    tid = o["id"]
+
+    w.current_tick = 18
+    db.commit()
+    res = execute_tool(db, w, "close_plot_thread",
+                       {"thread_id": tid, "resolution": "在沧州野猪林一役收"})
+    assert res["closed"] is True
+
+    th = db.query(PlotThread).filter_by(id=tid).first()
+    assert th.status == "closed"
+    assert th.closed_tick == 18
+    assert "野猪林" in th.resolution
+
+    sys_logs = db.query(NarrativeLog).filter_by(role="system").all()
+    closing = [l for l in sys_logs if "钩子收束" in l.text]
+    assert len(closing) == 1
+    assert "野猪林" in closing[0].text
+
+
+def test_close_plot_thread_noop_when_not_found(db, world_factory):
+    w, _ = world_factory()
+    res = execute_tool(db, w, "close_plot_thread", {"thread_id": "nope_xxx"})
+    assert res["ok"] is True
+    assert res["closed"] is False
+    assert res["reason"] == "not_found"
+
+
+def test_close_plot_thread_noop_when_already_closed(db, world_factory):
+    w, _ = world_factory()
+    o = execute_tool(db, w, "open_plot_thread", {"title": "t", "summary": "s"})
+    execute_tool(db, w, "close_plot_thread", {"thread_id": o["id"]})
+    # 再 close 一次
+    res = execute_tool(db, w, "close_plot_thread", {"thread_id": o["id"]})
+    assert res["closed"] is False
+    assert res["reason"] == "already_closed"
+
+
+def test_state_snapshot_exposes_open_threads(db, world_factory):
+    from app.engine.state import build_state_snapshot, state_as_prompt
+    w, _ = world_factory()
+    w.current_tick = 10
+    db.commit()
+    execute_tool(db, w, "open_plot_thread", {
+        "title": "未还的旧绢", "summary": "黛玉收下了一方旧绢但没还",
+    })
+    db.refresh(w)
+    snap = build_state_snapshot(db, w)
+    assert "open_plot_threads" in snap
+    assert len(snap["open_plot_threads"]) == 1
+    assert snap["open_plot_threads"][0]["title"] == "未还的旧绢"
+
+    out = state_as_prompt(snap)
+    assert "未收的剧情钩子" in out
+    assert "未还的旧绢" in out
+
+
+def test_state_snapshot_omits_threads_section_when_none(db, world_factory):
+    from app.engine.state import build_state_snapshot, state_as_prompt
+    w, _ = world_factory()
+    snap = build_state_snapshot(db, w)
+    assert "open_plot_threads" not in snap
+    out = state_as_prompt(snap)
+    assert "未收的剧情钩子" not in out
+
+
+def test_closed_threads_dont_appear_in_snapshot(db, world_factory):
+    from app.engine.state import build_state_snapshot
+    w, _ = world_factory()
+    o = execute_tool(db, w, "open_plot_thread", {"title": "a", "summary": "b"})
+    execute_tool(db, w, "close_plot_thread", {"thread_id": o["id"]})
+    snap = build_state_snapshot(db, w)
+    assert "open_plot_threads" not in snap  # 全 closed → 段落不出现
+
+
+def test_open_thread_age_marks_stale(db, world_factory):
+    """钩子拖了 5+ tick 时 prompt 应注明'拖了 X tick 了'，让 LLM 注意。"""
+    from app.engine.state import build_state_snapshot, state_as_prompt
+    w, _ = world_factory()
+    w.current_tick = 2
+    db.commit()
+    execute_tool(db, w, "open_plot_thread", {"title": "t", "summary": "s"})
+
+    w.current_tick = 20
+    db.commit()
+    snap = build_state_snapshot(db, w)
+    out = state_as_prompt(snap)
+    assert "拖了" in out  # stale marker
+
+
+def test_system_prompt_documents_thread_workflow():
+    """SYSTEM_PROMPT 应说明钩子的开 / 收工作流 + 修正第 1 条段落清单。"""
+    from app.engine.tools import SYSTEM_PROMPT
+    assert "open_plot_thread" in SYSTEM_PROMPT
+    assert "close_plot_thread" in SYSTEM_PROMPT
+    assert "未收的剧情钩子" in SYSTEM_PROMPT  # 第 1 条段落清单已更新
+    assert "未解决的因果钩子" not in SYSTEM_PROMPT  # 旧的撒谎措辞已删

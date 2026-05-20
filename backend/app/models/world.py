@@ -121,6 +121,23 @@ class ChapterMarker(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class PlotThread(Base):
+    __tablename__ = "plot_threads"
+    id = Column(String, primary_key=True)
+    branch_id = Column(String, ForeignKey("branches.id"), nullable=False, index=True)
+    title = Column(String, default="")
+    summary = Column(Text, default="")
+    opened_tick = Column(Integer, nullable=False)
+    closed_tick = Column(Integer, nullable=True)
+    status = Column(String, default="open")  # 'open' | 'closed'
+    resolution = Column(Text, default="")  # 收尾时填的兑现说明
+    related_entity_ids = Column(JSON, default=list)  # 涉及的实体 id 列表（可选）
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+Index("ix_plot_threads_branch_status", PlotThread.branch_id, PlotThread.status)
+
+
 Index("ix_chapter_markers_branch_tick", ChapterMarker.branch_id, ChapterMarker.tick)
 
 

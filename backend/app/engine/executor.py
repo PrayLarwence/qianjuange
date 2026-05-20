@@ -2,7 +2,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 from sqlalchemy.orm import Session
-from ..models import World, Branch, Entity, Event, CausalLink, NarrativeLog
+from ..models import World, Branch, Entity, Event, CausalLink, NarrativeLog, PlotThread
 
 
 def _new_id(prefix: str) -> str:
@@ -39,6 +39,10 @@ def execute_tool(db: Session, world: World, name: str, args: dict[str, Any]) -> 
         return _narrate(db, branch_id, world.current_tick, args)
     if name == "advance_outline_beat":
         return _advance_outline_beat(db, world, branch_id, args)
+    if name == "open_plot_thread":
+        return _open_plot_thread(db, world, branch_id, args)
+    if name == "close_plot_thread":
+        return _close_plot_thread(db, world, branch_id, args)
     if name == "end_turn":
         return {"ok": True, "ended": True}
     if name == "set_position":
@@ -308,6 +312,57 @@ def _advance_outline_beat(db: Session, world: World, branch_id: str, args: dict[
         "completed_index": cur, "new_current_index": cur + 1,
         "all_done": (cur + 1) >= len(beats),
     }
+
+
+def _open_plot_thread(db: Session, world: World, branch_id: str, args: dict[str, Any]) -> dict[str, Any]:
+    title = (args.get("title") or "").strip()
+    summary = (args.get("summary") or "").strip()
+    if not title or not summary:
+        raise ToolError("open_plot_thread: title and summary required")
+    related = args.get("related_entity_ids") or []
+    if not isinstance(related, list):
+        related = []
+    th = PlotThread(
+        id=_new_id("thd"),
+        branch_id=branch_id,
+        title=title[:120],
+        summary=summary,
+        opened_tick=world.current_tick,
+        status="open",
+        related_entity_ids=[str(r) for r in related if isinstance(r, str)],
+    )
+    db.add(th)
+    log = NarrativeLog(
+        id=_new_id("nar"), branch_id=branch_id, tick=world.current_tick,
+        role="system", text=f"[钩子开启] {title}",
+    )
+    db.add(log)
+    db.commit()
+    return {"ok": True, "id": th.id, "status": "open"}
+
+
+def _close_plot_thread(db: Session, world: World, branch_id: str, args: dict[str, Any]) -> dict[str, Any]:
+    tid = (args.get("thread_id") or "").strip()
+    if not tid:
+        raise ToolError("close_plot_thread: thread_id required")
+    th = db.query(PlotThread).filter_by(id=tid, branch_id=branch_id).first()
+    if th is None:
+        return {"ok": True, "closed": False, "reason": "not_found"}
+    if th.status == "closed":
+        return {"ok": True, "closed": False, "reason": "already_closed", "id": th.id}
+    resolution = (args.get("resolution") or "").strip()
+    th.status = "closed"
+    th.closed_tick = world.current_tick
+    th.resolution = resolution
+    log_text = f"[钩子收束] {th.title}"
+    if resolution:
+        log_text += f"  —— {resolution}"
+    db.add(NarrativeLog(
+        id=_new_id("nar"), branch_id=branch_id, tick=world.current_tick,
+        role="system", text=log_text,
+    ))
+    db.commit()
+    return {"ok": True, "closed": True, "id": th.id}
 
 
 def _load_map_or_raise(world: World):

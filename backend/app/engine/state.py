@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 from sqlalchemy.orm import Session
-from ..models import World, WorldTemplate, Entity, Event, CausalLink, NarrativeLog
+from ..models import World, WorldTemplate, Entity, Event, CausalLink, NarrativeLog, PlotThread
 
 
 from .executor import active_branch_id
@@ -256,6 +256,24 @@ def build_state_snapshot(db: Session, world: World, max_events: int = 30, max_en
     outline_block = _load_outline_block(db, world)
     if outline_block is not None:
         snapshot["outline_progress"] = outline_block
+    open_threads = (
+        db.query(PlotThread)
+        .filter_by(branch_id=branch_id, status="open")
+        .order_by(PlotThread.opened_tick)
+        .all()
+    )
+    if open_threads:
+        snapshot["open_plot_threads"] = [
+            {
+                "id": t.id,
+                "title": t.title,
+                "summary": t.summary,
+                "opened_tick": t.opened_tick,
+                "age_ticks": max(0, world.current_tick - (t.opened_tick or 0)),
+                "related_entity_ids": t.related_entity_ids or [],
+            }
+            for t in open_threads
+        ]
     return snapshot
 
 
@@ -371,6 +389,15 @@ def state_as_prompt(snapshot: dict) -> str:
     parts.append(json.dumps(snapshot["recent_events"], ensure_ascii=False, indent=2))
     parts.append("\n## 因果链")
     parts.append(json.dumps(snapshot["causal_links"], ensure_ascii=False, indent=2))
+    if snapshot.get("open_plot_threads"):
+        threads = snapshot["open_plot_threads"]
+        parts.append(f"\n## 未收的剧情钩子（{len(threads)}）")
+        parts.append("这些是你之前埋下、还没兑现的线。每条都是叙事债务，越久不收越显眼。在剩余节奏里要么收，要么明确开放结局。")
+        for t in threads:
+            age = t.get("age_ticks", 0)
+            stale = "（拖了 {} tick 了）".format(age) if age >= 5 else ""
+            parts.append(f"- [{t['id']}] {t['title']}{stale}")
+            parts.append(f"  {t['summary']}")
     parts.append("\n## 最近叙事")
     parts.append("\n---\n".join(snapshot["recent_narration"]))
     return "\n".join(parts)
