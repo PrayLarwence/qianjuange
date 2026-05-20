@@ -2200,7 +2200,9 @@ def instantiate_template(template_id: str, payload: InstantiateRequest, db: Sess
     world_name = (payload.name_override or t.name).strip() or "新世界"
     world = World(
         id=_new_id("w"), name=world_name,
-        description=t.description or "", rules=t.rules or {}, current_tick=0,
+        description=t.description or "",
+        outline=(t.long_description or "").strip(),
+        rules=t.rules or {}, current_tick=0,
         template_id=t.id,
         outline_progress={"current_index": 0, "completed": []},
         max_tick=int(t.max_steps_hint or 30),

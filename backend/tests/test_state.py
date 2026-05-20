@@ -186,3 +186,151 @@ def test_state_as_prompt_no_quickref_when_no_persona():
     }
     out = state_as_prompt(snap)
     assert "角色人格速查" not in out
+
+
+# ---- outline_progress 进 prompt ----
+
+def test_load_outline_block_no_template(db, world_factory):
+    """没绑定模板的世界返回 None，prompt 不会出现剧情进度章节。"""
+    from app.engine.state import _load_outline_block, build_state_snapshot, state_as_prompt
+    w, _ = world_factory()
+    assert _load_outline_block(db, w) is None
+    snap = build_state_snapshot(db, w)
+    assert "outline_progress" not in snap
+    assert "剧情进度" not in state_as_prompt(snap)
+
+
+def test_load_outline_block_with_template_and_progress(db, world_factory):
+    """绑模板 + 有进度时正常返回，含 current_beat / upcoming / completed。"""
+    from app.engine.state import _load_outline_block
+    from app.models import WorldTemplate
+    import uuid
+    t = WorldTemplate(
+        id=f"t_{uuid.uuid4().hex[:8]}", name="测试模板", description="",
+        canonical_outline=[
+            {"beat": "开学"},
+            {"beat": "分院"},
+            {"beat": "魁地奇试训"},
+            {"beat": "期末"},
+        ],
+    )
+    db.add(t); db.commit()
+    w, _ = world_factory()
+    w.template_id = t.id
+    w.outline_progress = {"current_index": 1, "completed": [0]}
+    db.commit()
+
+    block = _load_outline_block(db, w)
+    assert block is not None
+    assert block["current_index"] == 1
+    assert block["completed"] == [0]
+    assert block["current_beat"]["beat"] == "分院"
+    # upcoming 含当前及后续 2 条
+    upcoming = block["upcoming"]
+    assert len(upcoming) == 3
+    assert upcoming[0]["beat"] == "分院"
+    assert upcoming[1]["beat"] == "魁地奇试训"
+    assert block["all_done"] is False
+
+
+def test_load_outline_block_clamp_overflow(db, world_factory):
+    """current_index 超出范围时应 clamp 到末尾，all_done=True。"""
+    from app.engine.state import _load_outline_block
+    from app.models import WorldTemplate
+    import uuid
+    t = WorldTemplate(id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
+                      canonical_outline=[{"beat": "唯一"}])
+    db.add(t); db.commit()
+    w, _ = world_factory()
+    w.template_id = t.id
+    w.outline_progress = {"current_index": 99, "completed": [0]}
+    db.commit()
+    block = _load_outline_block(db, w)
+    assert block["all_done"] is True
+    assert block["current_beat"] is None
+
+
+def test_load_outline_block_empty_outline(db, world_factory):
+    """模板存在但 canonical_outline 空 → 返回 None。"""
+    from app.engine.state import _load_outline_block
+    from app.models import WorldTemplate
+    import uuid
+    t = WorldTemplate(id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
+                      canonical_outline=[])
+    db.add(t); db.commit()
+    w, _ = world_factory()
+    w.template_id = t.id
+    db.commit()
+    assert _load_outline_block(db, w) is None
+
+
+def test_load_outline_block_accepts_string_beats(db, world_factory):
+    """outline 里允许是字符串 list 而不是 dict list。"""
+    from app.engine.state import _load_outline_block
+    from app.models import WorldTemplate
+    import uuid
+    t = WorldTemplate(id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
+                      canonical_outline=["第一拍", "第二拍"])
+    db.add(t); db.commit()
+    w, _ = world_factory()
+    w.template_id = t.id
+    db.commit()
+    block = _load_outline_block(db, w)
+    assert block["beats"][0]["beat"] == "第一拍"
+    assert block["beats"][1]["beat"] == "第二拍"
+
+
+def test_state_as_prompt_renders_outline_progress():
+    """剧情进度章节渲染时应高亮当前节拍并标注完成/当前/未开始。"""
+    from app.engine.state import state_as_prompt
+    snap = {
+        "world": {"name": "x", "description": "", "current_tick": 0,
+                  "outline": "", "rules": {}},
+        "entities": [],
+        "recent_events": [], "causal_links": [], "recent_narration": [],
+        "outline_progress": {
+            "beats": [
+                {"index": 0, "beat": "开学"},
+                {"index": 1, "beat": "分院"},
+                {"index": 2, "beat": "期末"},
+            ],
+            "current_index": 1,
+            "completed": [0],
+            "current_beat": {"index": 1, "beat": "分院"},
+            "upcoming": [
+                {"index": 1, "beat": "分院"},
+                {"index": 2, "beat": "期末"},
+            ],
+            "all_done": False,
+        },
+    }
+    out = state_as_prompt(snap)
+    assert "剧情进度" in out
+    assert "当前应推进的节拍 #1" in out
+    assert "分院" in out
+    assert "[已完成]" in out
+    assert "[当前]" in out
+    assert "[未开始]" in out
+
+
+def test_state_as_prompt_renders_all_done():
+    """全部完成时章节应说明，并不再显示 current_beat。"""
+    from app.engine.state import state_as_prompt
+    snap = {
+        "world": {"name": "x", "description": "", "current_tick": 0,
+                  "outline": "", "rules": {}},
+        "entities": [],
+        "recent_events": [], "causal_links": [], "recent_narration": [],
+        "outline_progress": {
+            "beats": [{"index": 0, "beat": "唯一"}],
+            "current_index": 1,
+            "completed": [0],
+            "current_beat": None,
+            "upcoming": [],
+            "all_done": True,
+        },
+    }
+    out = state_as_prompt(snap)
+    assert "剧情进度" in out
+    assert "均已标记完成" in out
+    assert "当前应推进的节拍" not in out

@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 from sqlalchemy.orm import Session
-from ..models import World, Entity, Event, CausalLink, NarrativeLog
+from ..models import World, WorldTemplate, Entity, Event, CausalLink, NarrativeLog
 
 
 from .executor import active_branch_id
@@ -125,6 +125,49 @@ def _build_map_summary(world_id: str, entities: list[Entity]) -> Optional[dict]:
     return summary
 
 
+def _load_outline_block(db: Session, world: World) -> Optional[dict]:
+    """Pull canonical_outline + outline_progress for prompt rendering.
+
+    Returns None when the world has no template-driven outline. The block
+    includes the full beat list, current target index, completed indices,
+    and convenience pointers to next/upcoming beats so the LLM doesn't
+    have to compute them.
+    """
+    if not world.template_id:
+        return None
+    t = db.query(WorldTemplate).filter_by(id=world.template_id).first()
+    if t is None:
+        return None
+    outline = list(t.canonical_outline or [])
+    if not outline:
+        return None
+
+    progress = world.outline_progress or {}
+    current_index = int(progress.get("current_index", 0) or 0)
+    completed = sorted({int(i) for i in (progress.get("completed") or [])
+                        if isinstance(i, (int, float))})
+
+    beats = []
+    for i, b in enumerate(outline):
+        beat_text = ""
+        if isinstance(b, dict):
+            beat_text = (b.get("beat") or b.get("title") or b.get("description") or "").strip()
+        elif isinstance(b, str):
+            beat_text = b.strip()
+        beats.append({"index": i, "beat": beat_text})
+
+    n = len(beats)
+    current_index = max(0, min(current_index, n))  # clamp
+    return {
+        "beats": beats,
+        "current_index": current_index,
+        "completed": completed,
+        "current_beat": beats[current_index] if current_index < n else None,
+        "upcoming": beats[current_index:current_index + 3],
+        "all_done": current_index >= n,
+    }
+
+
 def build_state_snapshot(db: Session, world: World, max_events: int = 30, max_entities: int = 80) -> dict:
     branch_id = active_branch_id(world)
     entities = db.query(Entity).filter_by(branch_id=branch_id, alive=1).limit(max_entities).all()
@@ -182,6 +225,9 @@ def build_state_snapshot(db: Session, world: World, max_events: int = 30, max_en
     map_summary = _build_map_summary(world.id, entities)
     if map_summary is not None:
         snapshot["map"] = map_summary
+    outline_block = _load_outline_block(db, world)
+    if outline_block is not None:
+        snapshot["outline_progress"] = outline_block
     return snapshot
 
 
@@ -215,6 +261,53 @@ def _persona_quickref(entities: list[dict]) -> str:
     ])
 
 
+def _render_outline_progress(op: dict) -> str:
+    """Render the outline progress block as a high-priority prompt section.
+
+    The director needs to know two things:
+      1. The full beat list (so it sees where the story is going)
+      2. WHICH beat is the current one (so it knows what to push toward this turn)
+    """
+    beats = op.get("beats") or []
+    if not beats:
+        return ""
+
+    n = len(beats)
+    current_index = op.get("current_index", 0)
+    completed = set(op.get("completed") or [])
+
+    lines = ["\n## 剧情进度（结构化大纲，必须按节拍推进）"]
+
+    if op.get("all_done"):
+        lines.append(f"全部 {n} 个节拍均已标记完成。可在大纲框架内自由收束剩余支线。")
+    else:
+        cur = op.get("current_beat") or {}
+        cur_text = cur.get("beat") or "（节拍内容为空）"
+        lines.append(f"**当前应推进的节拍 #{current_index}：{cur_text}**")
+        lines.append("→ 这一回合的事件应当朝这个节拍推进；如果剧情已经满足这个节拍，请生成完成它的事件。")
+
+        upcoming = (op.get("upcoming") or [])[1:]  # skip current
+        if upcoming:
+            lines.append("\n**接下来 1-2 个节拍（尚未启动，先别越过当前节拍）：**")
+            for b in upcoming:
+                lines.append(f"  - #{b['index']}  {b['beat']}")
+
+    lines.append(f"\n**完整节拍清单（共 {n} 个）：**")
+    for b in beats:
+        idx = b["index"]
+        if idx in completed:
+            mark = "[已完成]"
+        elif idx == current_index:
+            mark = "[当前]"
+        elif idx < current_index:
+            mark = "[已跳过]"
+        else:
+            mark = "[未开始]"
+        lines.append(f"  {mark} #{idx}  {b['beat']}")
+
+    return "\n".join(lines)
+
+
 def state_as_prompt(snapshot: dict) -> str:
     parts = [
         "## 世界状态",
@@ -225,6 +318,11 @@ def state_as_prompt(snapshot: dict) -> str:
     if outline:
         parts.append("\n## 世界全貌大纲（必须完整遵循；若提及经典原作则按原作还原，否则按此大纲推演）")
         parts.append(outline)
+    op_block = snapshot.get("outline_progress")
+    if op_block:
+        rendered = _render_outline_progress(op_block)
+        if rendered:
+            parts.append(rendered)
     if "map" in snapshot:
         m = snapshot["map"]
         parts.append(f"\n## 地图  {m['width']}×{m['height']}")
