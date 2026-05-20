@@ -139,3 +139,26 @@ def world_factory(db):
         return w, br
 
     return make
+
+
+@pytest.fixture
+def map_factory(monkeypatch, tmp_path):
+    """落一张最小地图到磁盘（隔离到 tmp_path）。返回 (saver(world_id, w, h), MAP_DIR)。"""
+    import numpy as np
+    from app.engine import worldgen as wg
+
+    fake_dir = tmp_path / "maps"
+    fake_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(wg, "MAP_DIR", fake_dir)
+
+    def save(world_id: str, w: int = 5, h: int = 5):
+        terrain = np.full((h, w), wg.TERRAIN_PLAIN, dtype=np.uint8)
+        zeros = np.zeros((h, w), dtype=np.uint8)
+        wg.save(world_id, {
+            "width": w, "map_h": h, "seed": 1,
+            "sea_level": 0.4, "sea_h": 100.0,
+            "terrain": terrain, "height": zeros,
+            "temp": zeros, "moist": zeros, "biome": zeros,
+        })
+
+    yield save
