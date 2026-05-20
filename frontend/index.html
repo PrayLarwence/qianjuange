@@ -2127,6 +2127,53 @@
   </div>
 </div>
 
+<!-- A6 起：dev 抽屉。新功能默认进这里，主页 timeline 不再追加 UI。
+     等所有后端功能稳定后会被一次性整体重构替代。 -->
+<button x-show="currentWorldId" @click="toggleDevDrawer()"
+  class="fixed bottom-4 right-4 z-40 w-11 h-11 rounded-full text-lg shadow-lg
+         bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 text-zinc-200
+         flex items-center justify-center" title="开发者抽屉（实验功能）">🛠</button>
+
+<div x-show="devDrawer.open" x-cloak class="fixed inset-0 z-40 pointer-events-none">
+  <div class="absolute inset-0 bg-black/40 pointer-events-auto" @click="devDrawer.open = false"></div>
+  <div class="absolute right-0 top-0 bottom-0 w-[420px] max-w-[95vw] pointer-events-auto
+              bg-zinc-900 border-l border-zinc-700 shadow-2xl flex flex-col
+              transition-transform"
+       :class="devDrawer.open ? 'translate-x-0' : 'translate-x-full'">
+    <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+      <div>
+        <div class="font-semibold flex items-center gap-2"><span>🛠</span><span>开发者抽屉</span></div>
+        <div class="text-[11px] text-zinc-500 mt-0.5">实验中的新功能。最终会重做这部分 UI。</div>
+      </div>
+      <button @click="devDrawer.open = false" class="text-zinc-500 hover:text-zinc-300">✕</button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto p-4 space-y-4 text-sm">
+
+      <!-- A6: 自纠环开关 -->
+      <fieldset class="border border-zinc-800 rounded p-3 space-y-2">
+        <legend class="px-1 text-xs text-emerald-400">A6 · 编辑→导演自纠环</legend>
+        <div class="text-xs text-zinc-400 leading-relaxed">
+          推演下一段时，把 Editor 已发现的"未解决一致性问题"塞给 Director，
+          让 LLM 主动避免再犯。每次最多 5 条，按严重度排序。
+        </div>
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" :checked="selfCorrectionEnabled()"
+            @change="toggleSelfCorrection($event.target.checked)"
+            :disabled="devDrawer.savingRules" />
+          <span x-text="selfCorrectionEnabled() ? '已启用（默认）' : '已关闭'"></span>
+          <span x-show="devDrawer.savingRules" class="text-zinc-500 text-xs">保存中…</span>
+        </label>
+        <div class="text-[11px] text-zinc-600">
+          关闭场景：测试 Director 在没有反馈时的"原始"输出，或绕过 Editor 的误报。
+        </div>
+      </fieldset>
+
+      <div class="text-[11px] text-zinc-600 italic">后续 A/B 路线的实验功能会陆续出现在这里。</div>
+    </div>
+  </div>
+</div>
+
 <div x-show="chapterCritique.open" x-cloak class="fixed inset-0 miku-modal-bg flex items-center justify-center z-50" @click.self="closeChapterCritique()">
   <div class="miku-card miku-slide-in w-[680px] max-w-[95vw] max-h-[85vh] flex flex-col">
     <div class="px-5 py-3.5 border-b flex items-center justify-between" style="border-color: var(--bd-1);">

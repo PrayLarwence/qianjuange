@@ -22,7 +22,7 @@ from typing import Any, Callable, Optional
 
 from sqlalchemy.orm import Session
 
-from ..models import World, Branch, Entity, Event, NarrativeLog
+from ..models import World, Branch, Entity, Event, NarrativeLog, ConsistencyIssue
 from ..providers import get_provider, LLMProvider
 from ..providers.base import Message, ToolCall, ToolSpec
 from .state import build_state_snapshot, state_as_prompt
@@ -71,11 +71,57 @@ def _serialize_tool_call(tc: ToolCall, result: Any, error: Optional[str] = None)
     }
 
 
-def _build_user_prompt(snapshot: dict, user_directive: Optional[str], world: World) -> str:
+def _build_self_correction_block(db: Session, world: World) -> str:
+    """A6 自纠环：把 Editor（一致性扫描）发现的未解决问题塞给 Director。
+
+    取本 branch status='open' 的 ConsistencyIssue，按 severity（high → low）
+    + tick_end 倒序排，最多 5 条。Director 写下一段时能看见'前面踩过哪些坑'。
+
+    通过 world.rules.disable_self_correction = True 关闭。
+    无 issues 或被关闭时返 ""。
+    """
+    if (world.rules or {}).get("disable_self_correction"):
+        return ""
+    branch_id = active_branch_id(world)
+    if not branch_id:
+        return ""
+
+    issues = (
+        db.query(ConsistencyIssue)
+        .filter_by(branch_id=branch_id, status="open")
+        .order_by(ConsistencyIssue.tick_end.desc())
+        .limit(20)
+        .all()
+    )
+    if not issues:
+        return ""
+
+    rank = {"high": 0, "medium": 1, "low": 2}
+    issues.sort(key=lambda i: (rank.get(i.severity or "medium", 1), -(i.tick_end or 0)))
+    top = issues[:5]
+
+    lines = ["\n# 编辑反馈（之前章节发现的连贯性问题，下一段不要重蹈覆辙）"]
+    for i in top:
+        cat = i.category or "other"
+        sev = i.severity or "medium"
+        title = (i.title or "").strip()[:40]
+        desc = (i.description or "").strip()[:120]
+        sug = (i.suggestion or "").strip()[:120]
+        line = f"- [{sev}/{cat}] {title}：{desc}"
+        if sug:
+            line += f"（建议：{sug}）"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _build_user_prompt(db: Session, snapshot: dict, user_directive: Optional[str], world: World) -> str:
     parts = [state_as_prompt(snapshot)]
     rules_text = render_world_rules(world.rules or {})
     if rules_text:
         parts.append("\n# 世界规则（强约束）\n" + rules_text)
+    feedback = _build_self_correction_block(db, world)
+    if feedback:
+        parts.append(feedback)
     if user_directive and user_directive.strip():
         parts.append(f"\n# 用户指令\n{user_directive.strip()}")
     parts.append(
@@ -208,7 +254,7 @@ def run_step(
 
     start_tick = world.current_tick
     snapshot = build_state_snapshot(db, world)
-    user_prompt = _build_user_prompt(snapshot, user_directive, world)
+    user_prompt = _build_user_prompt(db, snapshot, user_directive, world)
 
     messages: list[Message] = [Message(role="user", content=user_prompt)]
     tool_calls_log: list[dict] = []

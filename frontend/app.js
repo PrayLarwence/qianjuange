@@ -32,6 +32,9 @@ function sandbox() {
     showSettings: false,
     savingSettings: false,
     settingsMessage: '',
+
+    // dev 抽屉：A6 起所有新功能默认进这里。主页 timeline 不再加东西。
+    devDrawer: { open: false, savingRules: false },
     llmConfig: { active: 'claude', providers: {} },
     llmMeta: {},
     keyDrafts: {},
@@ -2930,6 +2933,41 @@ function sandbox() {
 
     closeChapterCritique() {
       this.chapterCritique = { open: false, loading: false, chapter: null, data: null, error: '' };
+    },
+
+    // ----- dev 抽屉（A6 起） -----
+    // 主页面不再加新 UI；后端新功能默认在这里露出最小入口，方便测试。
+    // 全部稳定后整体重构，到时这里会被废弃，但功能已经经过实际验证。
+    toggleDevDrawer() {
+      this.devDrawer.open = !this.devDrawer.open;
+    },
+
+    worldRules() {
+      return (this.world && this.world.world && this.world.world.rules) || {};
+    },
+
+    selfCorrectionEnabled() {
+      return !this.worldRules().disable_self_correction;
+    },
+
+    async toggleSelfCorrection(enabled) {
+      if (!this.currentWorldId) return;
+      const rules = { ...this.worldRules() };
+      if (enabled) {
+        delete rules.disable_self_correction;
+      } else {
+        rules.disable_self_correction = true;
+      }
+      this.devDrawer.savingRules = true;
+      try {
+        await this.api('PATCH', `/worlds/${this.currentWorldId}`, { rules });
+        if (this.world?.world) this.world.world.rules = rules;
+        this.flashToast(enabled ? '自纠环已启用' : '自纠环已关闭');
+      } catch (e) {
+        alert('保存失败: ' + e.message);
+      } finally {
+        this.devDrawer.savingRules = false;
+      }
     },
 
     async openTemplates() {
