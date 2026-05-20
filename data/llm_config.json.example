@@ -1,0 +1,25 @@
+{
+  "active": "deepseek",
+  "providers": {
+    "claude": {
+      "api_key": "",
+      "model": "claude-opus-4-7",
+      "base_url": "https://api.anthropic.com"
+    },
+    "openai": {
+      "api_key": "",
+      "model": "gpt-4o-mini",
+      "base_url": "https://api.openai.com/v1"
+    },
+    "deepseek": {
+      "api_key": "",
+      "model": "deepseek-chat",
+      "base_url": "https://api.deepseek.com/v1"
+    },
+    "ollama": {
+      "api_key": "",
+      "model": "llama3.1",
+      "base_url": "http://localhost:11434"
+    }
+  }
+}
