@@ -207,19 +207,34 @@ def view_as_prompt(view: dict) -> str:
     """Render a character view as a prompt block, written in 2nd person."""
     v = view["viewer"]
     persona = v.get("persona") or {}
+    drives = persona.get("drives") or []
+    voice = (persona.get("voice") or "").strip()
+    blind = persona.get("knowledge_blindspots") or []
+
     parts = [
         f"## 你是谁",
         f"你是【{v['name']}】（{v.get('summary') or ''}）。",
+        "",
+        "## 你的人格（这是本回合最重要的约束）",
     ]
-    drives = persona.get("drives") or []
+
     if drives:
-        parts.append(f"你的动机：{', '.join(drives)}")
-    voice = persona.get("voice")
+        parts.append("**你的 drives（动机，按优先级）：**")
+        for i, d in enumerate(drives, 1):
+            parts.append(f"  {i}. {d}")
+        parts.append("→ 这一回合每一次行动都必须能回答：『这是我哪个 drive 在驱动？』回答不出来就不要做。")
+    else:
+        parts.append("（这个角色暂未填写 drives——请基于 summary 与既往事件保守地推断他的核心动机，不要凭空给他新欲望。）")
+
     if voice:
-        parts.append(f"你的语气与性格：{voice}")
-    blind = persona.get("knowledge_blindspots") or []
+        parts.append(f"\n**你的 voice（说话风格）：** {voice}")
+        parts.append("→ 你这一回合的 speak 必须用这种语气、节奏、用词习惯。")
+    else:
+        parts.append("\n（voice 未填写。说话保持中性、与你的 summary 不冲突即可，不要发明独特口癖。）")
+
     if blind:
-        parts.append(f"你不知道的事：{', '.join(blind)}（不要在思考或行动中表现出对它们的了解）")
+        parts.append(f"\n**你的 knowledge_blindspots（盲区）：** {', '.join(blind)}")
+        parts.append("→ 这些事你**不知道**。即便下面的事件清单里写了，也要装作没看见。")
 
     parts.append(f"\n## 你的现况  tick={view['world']['current_tick']}")
     if v.get("pos"):

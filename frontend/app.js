@@ -1459,12 +1459,12 @@ function sandbox() {
       let drives, blindspots, knowledgeOf, voice;
       if (mode === 'merge') {
         drives = dedup([...existing.drives, ...(s.drives || [])]);
-        blindspots = dedup([...existing.blindspots, ...(s.blindspots || [])]);
+        blindspots = dedup([...existing.blindspots, ...(s.knowledge_blindspots || s.blindspots || [])]);
         knowledgeOf = dedup([...existing.knowledgeOf, ...(s.knowledge_of || [])]);
         voice = existing.voice || (s.voice || '');
       } else {
         drives = dedup(s.drives || []);
-        blindspots = dedup(s.blindspots || []);
+        blindspots = dedup(s.knowledge_blindspots || s.blindspots || []);
         knowledgeOf = dedup(s.knowledge_of || []);
         voice = (s.voice || '').trim();
       }

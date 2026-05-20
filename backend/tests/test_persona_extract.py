@@ -117,8 +117,8 @@ def test_extract_persona_parses_llm_output(db, world_factory):
     s = res["suggestion"]
     assert s["drives"] == ["复仇", "保护妹妹"]
     assert s["voice"] == "冷静低沉"
-    # blindspots 是字符串也应转成 list
-    assert s["blindspots"] == ["重感情"]
+    # blindspots 是字符串也应转成 list；统一字段名 knowledge_blindspots
+    assert s["knowledge_blindspots"] == ["重感情"]
     assert "knowledge_of_resolved" in s
 
 
@@ -139,6 +139,73 @@ def test_extract_persona_unparseable_llm(db, world_factory):
     res = extract_persona(db, eid, provider=FakeP())
     assert res["ok"] is False
     assert "解析" in res["reason"] or "JSON" in res["reason"]
+
+
+def test_extract_persona_accepts_canonical_key(db, world_factory):
+    """LLM 直接吐 knowledge_blindspots 也应被接受（不依赖 fallback）。"""
+    from app.engine.persona_extract import extract_persona
+    w, _ = world_factory()
+    eid = execute_tool(db, w, "create_entity", {"type": "character", "name": "x"})["id"]
+    for _ in range(2):
+        execute_tool(db, w, "add_event", {"title": "x", "description": "x",
+                                          "participants": [eid]})
+
+    class FakeP:
+        name = "fake"
+        def chat(self, *a, **k):
+            return LLMResponse(text=(
+                '{"drives": ["a"], "voice": "v", '
+                '"knowledge_blindspots": ["盲A"], "knowledge_of": [], "rationale": "r"}'
+            ))
+
+    res = extract_persona(db, eid, provider=FakeP())
+    assert res["suggestion"]["knowledge_blindspots"] == ["盲A"]
+
+
+def test_view_as_prompt_emphasizes_persona():
+    """view_as_prompt 应把 drives / voice / blindspots 抬到约束位置。"""
+    from app.engine.character_view import view_as_prompt
+    view = {
+        "viewer": {
+            "name": "甲", "summary": "测试角色",
+            "persona": {
+                "drives": ["复仇"],
+                "voice": "冷静",
+                "knowledge_blindspots": ["盲A"],
+            },
+            "attributes": {}, "state": {}, "memories": [],
+        },
+        "world": {"current_tick": 0},
+        "visible_entities": [],
+        "visible_events": [],
+    }
+    out = view_as_prompt(view)
+    assert "drives" in out
+    assert "复仇" in out
+    assert "voice" in out
+    assert "冷静" in out
+    assert "盲A" in out
+    # 必须强约束语气
+    assert "drive" in out.lower()
+
+
+def test_view_as_prompt_handles_missing_persona():
+    """没填 persona 时也不该崩，且应给 LLM 兜底说明。"""
+    from app.engine.character_view import view_as_prompt
+    view = {
+        "viewer": {
+            "name": "无人格", "summary": "x",
+            "persona": {},
+            "attributes": {}, "state": {}, "memories": [],
+        },
+        "world": {"current_tick": 0},
+        "visible_entities": [],
+        "visible_events": [],
+    }
+    out = view_as_prompt(view)
+    assert "无人格" in out
+    # 兜底文案应提示未填
+    assert "未填" in out or "暂未" in out
 
 
 def test_extract_persona_llm_exception_is_caught(db, world_factory):

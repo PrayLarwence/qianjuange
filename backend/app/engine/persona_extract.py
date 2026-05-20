@@ -9,7 +9,7 @@ The output is a structured dict matching the persona schema:
   {
     "drives":     [str, ...],   # 1-4 short motivations
     "voice":      str,          # one-line speech style
-    "blindspots": [str, ...],   # 0-3 things they tend to ignore or misread
+    "blindspots": [str, ...],   # 0-3 things they tend to ignore or misread (saved as knowledge_blindspots)
     "knowledge_of": [str, ...], # entity ids/names they know about
     "rationale":  str,          # one paragraph explaining the inference
   }
@@ -40,7 +40,7 @@ SYSTEM_PROMPT = """你是一位心理画像分析师。我会给你一个角色�
 {
   "drives":     ["驱动1", "驱动2"],         // 1-4 条；他真正在追求什么
   "voice":      "一句话描述他的说话风格",     // 例：谨慎多疑，用词简短直接
-  "blindspots": ["盲区1"],                  // 0-3 条；他容易忽略或误判什么
+  "knowledge_blindspots": ["盲区1"],        // 0-3 条；他容易忽略或误判什么（也接受字段名 blindspots）
   "knowledge_of": ["他显然认识的角色名"],    // 0-N 条；从事件交互推断
   "rationale":  "一段不超过 80 字的中文，说明你为什么这么判断（基于哪些事件）"
 }
@@ -124,7 +124,9 @@ def extract_persona(
     suggestion = {
         "drives":       _as_str_list(parsed.get("drives"), max_n=4),
         "voice":        str(parsed.get("voice") or "").strip(),
-        "blindspots":   _as_str_list(parsed.get("blindspots"), max_n=3),
+        # accept either key from LLM, but always emit the canonical name used everywhere else
+        "knowledge_blindspots": _as_str_list(
+            parsed.get("knowledge_blindspots") or parsed.get("blindspots"), max_n=3),
         "knowledge_of": _as_str_list(parsed.get("knowledge_of"), max_n=20),
         "rationale":    str(parsed.get("rationale") or "").strip(),
     }
