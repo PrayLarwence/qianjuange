@@ -101,3 +101,88 @@ def test_build_state_snapshot_skips_dead(db, world_factory):
     names = {e["name"] for e in snap["entities"]}
     assert "幸存者" in names
     assert "阵亡者" not in names
+
+
+# ---- persona 进 prompt ----
+
+def test_prompt_includes_character_persona():
+    full = {
+        "id": "e1", "type": "character", "name": "林冲",
+        "persona": {
+            "drives": ["雪冤", "保家小"],
+            "voice": "沉默克制，话不多",
+            "knowledge_blindspots": ["高俅的真实背景"],
+        },
+    }
+    out = _entity_for_prompt(full)
+    assert "persona" in out
+    assert out["persona"]["drives"] == ["雪冤", "保家小"]
+    assert out["persona"]["voice"] == "沉默克制，话不多"
+    assert out["persona"]["knowledge_blindspots"] == ["高俅的真实背景"]
+
+
+def test_prompt_skips_persona_for_non_character():
+    """location / item 等非角色不需要 persona，省 token。"""
+    full = {
+        "id": "loc1", "type": "location", "name": "梁山",
+        "persona": {"drives": ["???"]},
+    }
+    out = _entity_for_prompt(full)
+    assert "persona" not in out
+
+
+def test_prompt_skips_empty_persona():
+    full = {"id": "e1", "type": "character", "name": "甲",
+            "persona": {}}
+    out = _entity_for_prompt(full)
+    assert "persona" not in out
+
+
+def test_prompt_drops_empty_persona_subfields():
+    """drives 为空数组、voice 为空串都应被丢掉，只保留有内容的子字段。"""
+    full = {"id": "e1", "type": "character", "name": "甲",
+            "persona": {"drives": [], "voice": "", "knowledge_blindspots": ["盲A"]}}
+    out = _entity_for_prompt(full)
+    assert out["persona"] == {"knowledge_blindspots": ["盲A"]}
+
+
+# ---- state_as_prompt 速查章节 ----
+
+def test_state_as_prompt_emits_persona_quickref():
+    """有 persona 的角色应出现在'角色人格速查'独立章节里。"""
+    from app.engine.state import state_as_prompt
+    snap = {
+        "world": {"name": "测试世界", "description": "", "current_tick": 0,
+                  "outline": "", "rules": {}},
+        "entities": [
+            {"id": "e1", "type": "character", "name": "林冲",
+             "persona": {"drives": ["雪冤"], "voice": "沉默"}},
+            {"id": "e2", "type": "character", "name": "高俅",
+             "persona": {}},  # 应被跳过
+            {"id": "loc1", "type": "location", "name": "东京"},
+        ],
+        "recent_events": [], "causal_links": [], "recent_narration": [],
+    }
+    out = state_as_prompt(snap)
+    assert "角色人格速查" in out
+    assert "林冲" in out
+    assert "雪冤" in out
+    assert "沉默" in out
+    # 高俅没填 persona，不应在速查段落里出现
+    quickref_section = out.split("角色人格速查")[1].split("\n##")[0]
+    assert "高俅" not in quickref_section
+
+
+def test_state_as_prompt_no_quickref_when_no_persona():
+    """全部角色都没 persona 时，速查章节不应出现。"""
+    from app.engine.state import state_as_prompt
+    snap = {
+        "world": {"name": "x", "description": "", "current_tick": 0,
+                  "outline": "", "rules": {}},
+        "entities": [
+            {"id": "e1", "type": "character", "name": "甲", "persona": {}},
+        ],
+        "recent_events": [], "causal_links": [], "recent_narration": [],
+    }
+    out = state_as_prompt(snap)
+    assert "角色人格速查" not in out

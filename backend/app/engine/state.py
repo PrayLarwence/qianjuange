@@ -45,6 +45,15 @@ def _entity_for_prompt(e: dict) -> dict:
         out["attributes"] = e["attributes"]
     if e.get("state"):
         out["state"] = e["state"]
+    # persona — only for characters, only non-empty fields, so token cost stays low.
+    if e.get("type") == "character":
+        p = e.get("persona") or {}
+        kept = {}
+        if p.get("drives"): kept["drives"] = p["drives"]
+        if p.get("voice"):  kept["voice"] = p["voice"]
+        if p.get("knowledge_blindspots"): kept["knowledge_blindspots"] = p["knowledge_blindspots"]
+        if kept:
+            out["persona"] = kept
     if e.get("location_id"):
         out["location_id"] = e["location_id"]
     mx, my = e.get("map_x"), e.get("map_y")
@@ -176,6 +185,36 @@ def build_state_snapshot(db: Session, world: World, max_events: int = 30, max_en
     return snapshot
 
 
+def _persona_quickref(entities: list[dict]) -> str:
+    """A high-attention block listing every character's persona.
+
+    The LLM tends to skim the entities JSON and miss persona buried inside.
+    Pulling drives/voice/blindspots up here as a 'cheat sheet' makes them
+    show up at top-of-prompt where attention is highest.
+    """
+    rows = []
+    for e in entities:
+        if e.get("type") != "character":
+            continue
+        p = e.get("persona") or {}
+        drives = p.get("drives") or []
+        voice = (p.get("voice") or "").strip()
+        blind = p.get("knowledge_blindspots") or []
+        if not (drives or voice or blind):
+            continue
+        bits = [f"**{e['name']}**（{e['id']}）"]
+        if drives: bits.append(f"drives: {', '.join(drives)}")
+        if voice:  bits.append(f"voice: {voice}")
+        if blind:  bits.append(f"blindspots: {', '.join(blind)}")
+        rows.append("- " + "  |  ".join(bits))
+    if not rows:
+        return ""
+    return "\n".join([
+        "\n## 角色人格速查（推演时必须遵守 —— 每个事件的言行都要符合当事人的 drives 和 voice，盲区不许使用）",
+        *rows,
+    ])
+
+
 def state_as_prompt(snapshot: dict) -> str:
     parts = [
         "## 世界状态",
@@ -193,6 +232,9 @@ def state_as_prompt(snapshot: dict) -> str:
         if m.get("entities_on_map"):
             parts.append("当前位于地图上的实体:")
             parts.append(json.dumps(m["entities_on_map"], ensure_ascii=False, indent=2))
+    quickref = _persona_quickref(snapshot["entities"])
+    if quickref:
+        parts.append(quickref)
     parts.append(f"\n## 实体（{len(snapshot['entities'])}）")
     parts.append(json.dumps(
         [_entity_for_prompt(e) for e in snapshot["entities"]],
