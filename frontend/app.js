@@ -391,6 +391,7 @@ function sandbox() {
 
     async loadWorld() {
       if (!this.currentWorldId) return;
+      this._resetWorldScopedState();
       this.world = await this.api('GET', `/worlds/${this.currentWorldId}`);
       this.entities = this.world.entities;
       this.branches = await this.api('GET', `/worlds/${this.currentWorldId}/branches`);
@@ -400,6 +401,31 @@ function sandbox() {
       this.loadOutline();
       this.refreshIssues();
       this.$nextTick(() => this.renderGraph());
+    },
+
+    _resetWorldScopedState() {
+      this.entities = [];
+      this.timeline = { events: [], links: [], narration: [] };
+      this.selectedEntity = null;
+      this.charViewEntity = null;
+      this.charView = null;
+      this.personaSuggestion = null;
+      this.chatTarget = null;
+      this.chatHistory = [];
+      this.chatViewTick = null;
+      this.liveToolCalls = [];
+      this.lastStep = null;
+      this.pendingChanges = [];
+      this.reconcileResult = null;
+      this.compareWith = null;
+      this.compareTimeline = { events: [], links: [], narration: [] };
+      this.relGraph = null;
+      this.relNodes = [];
+      this.relEdges = [];
+      this.relSelected = null;
+      this.chapters = [];
+      this.novelizeChapters = [];
+      this.linkSourceId = null;
     },
 
     async setMaxTick(v) {
