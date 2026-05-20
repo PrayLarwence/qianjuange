@@ -241,7 +241,7 @@ def switch_branch(world_id: str, branch_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/worlds/{world_id}/timeline")
-def get_timeline(world_id: str, branch_id: str | None = None, db: Session = Depends(get_db)):
+def get_timeline(world_id: str, branch_id: str | None = None, include_drafts: int = 0, db: Session = Depends(get_db)):
     world = db.query(World).filter_by(id=world_id).first()
     if not world:
         raise HTTPException(404, "world not found")
@@ -251,6 +251,10 @@ def get_timeline(world_id: str, branch_id: str | None = None, db: Session = Depe
     links = db.query(CausalLink).filter_by(branch_id=bid).all()
     visible_links = [l for l in links if l.cause_event_id in event_ids and l.effect_event_id in event_ids]
     narration = db.query(NarrativeLog).filter_by(branch_id=bid).order_by(NarrativeLog.tick).all()
+    # 默认隐藏 director_draft（Author 改写前的粗稿，前端切到"草稿对照"才需要）。
+    # editor_critique 也默认不返回——它属于 Editor 内部评注，A5 阶段会有专门端点。
+    if not include_drafts:
+        narration = [n for n in narration if (n.role or "narrator") not in ("director_draft", "editor_critique")]
     threads = (db.query(PlotThread)
                  .filter_by(branch_id=bid)
                  .order_by(PlotThread.opened_tick)
@@ -264,7 +268,14 @@ def get_timeline(world_id: str, branch_id: str | None = None, db: Session = Depe
             "participants": e.participants, "location_id": e.location_id, "consequences": e.consequences,
         } for e in events],
         "links": [{"cause": l.cause_event_id, "effect": l.effect_event_id, "description": l.description, "weight": l.weight} for l in visible_links],
-        "narration": [{"tick": n.tick, "text": n.text, "role": n.role or "narrator"} for n in narration],
+        "narration": [{
+            "id": n.id,
+            "tick": n.tick,
+            "text": n.text,
+            "role": n.role or "narrator",
+            "parent_log_id": n.parent_log_id,
+            "revision_index": n.revision_index or 0,
+        } for n in narration],
         "plot_threads": [{
             "id": t.id, "title": t.title, "summary": t.summary, "status": t.status,
             "opened_tick": t.opened_tick, "closed_tick": t.closed_tick,

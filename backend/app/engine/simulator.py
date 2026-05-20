@@ -88,6 +88,15 @@ def _build_user_prompt(snapshot: dict, user_directive: Optional[str], world: Wor
 
 
 def _collect_recent_narration(db: Session, world: World, since_tick: int) -> list[str]:
+    """取本回合的"展示用"叙述。
+
+    新管线下同一 tick 可能有：
+      - role='director_draft' (Author 改写前的粗稿，不展示)
+      - role='author_final'   (Author 改写后的定稿，展示)
+      - role='narrator'       (老数据/未跑 Author 的回合)
+
+    展示规则：同 tick 内 author_final 优先；否则 narrator。director_draft 永远跳过。
+    """
     branch_id = active_branch_id(world)
     rows = (
         db.query(NarrativeLog)
@@ -95,7 +104,22 @@ def _collect_recent_narration(db: Session, world: World, since_tick: int) -> lis
         .order_by(NarrativeLog.tick.asc(), NarrativeLog.created_at.asc())
         .all()
     )
-    return [r.text for r in rows if r.text]
+    # 每个 tick 选最佳一条；同优先级保留多条（同 tick 多次 author_final 不太常见，但允许）
+    by_tick: dict[int, list[NarrativeLog]] = {}
+    for r in rows:
+        by_tick.setdefault(r.tick, []).append(r)
+    out: list[str] = []
+    for tick in sorted(by_tick.keys()):
+        items = by_tick[tick]
+        finals = [x for x in items if x.role == "author_final" and (x.text or "").strip()]
+        if finals:
+            for r in finals:
+                out.append(r.text)
+            continue
+        narrators = [x for x in items if x.role in ("narrator", None) and (x.text or "").strip()]
+        for r in narrators:
+            out.append(r.text)
+    return out
 
 
 # ---------- mock executor ----------
@@ -280,6 +304,30 @@ def run_step(
             pass
 
     db.commit()
+
+    # ----- Author 阶段：把本回合粗稿改写为小说级定稿 -----
+    # 失败/无风格/mock 模式都会走 Author 内部回落逻辑（draft 直接 promote）。
+    author_meta: dict | None = None
+    try:
+        from .author import run_author_for_step
+        from .draft_cleanup import cleanup_old_drafts
+        ar = run_author_for_step(
+            db, world, active_branch_id(world), start_tick,
+            provider=None,
+        )
+        if ar.ok and ar.log_id:
+            author_meta = {
+                "log_id": ar.log_id,
+                "fell_back": ar.fell_back,
+                "reason": ar.reason or None,
+                "char_count": len(ar.text or ""),
+            }
+        # 不论成功/回落，都清理过期 draft
+        cleanup_old_drafts(db, active_branch_id(world))
+    except Exception as e:
+        # Author 阶段本身崩溃也不能阻挡推演返回；老 narrator 会被 _collect 兜底。
+        log.exception("author phase failed: %s", e)
+
     narration = _collect_recent_narration(db, world, start_tick)
 
     _safe_progress(on_progress, {
@@ -458,6 +506,30 @@ def run_reconcile(
             break
 
     db.commit()
+
+    # ----- Author 阶段：把本回合粗稿改写为小说级定稿 -----
+    # 失败/无风格/mock 模式都会走 Author 内部回落逻辑（draft 直接 promote）。
+    author_meta: dict | None = None
+    try:
+        from .author import run_author_for_step
+        from .draft_cleanup import cleanup_old_drafts
+        ar = run_author_for_step(
+            db, world, active_branch_id(world), start_tick,
+            provider=None,
+        )
+        if ar.ok and ar.log_id:
+            author_meta = {
+                "log_id": ar.log_id,
+                "fell_back": ar.fell_back,
+                "reason": ar.reason or None,
+                "char_count": len(ar.text or ""),
+            }
+        # 不论成功/回落，都清理过期 draft
+        cleanup_old_drafts(db, active_branch_id(world))
+    except Exception as e:
+        # Author 阶段本身崩溃也不能阻挡推演返回；老 narrator 会被 _collect 兜底。
+        log.exception("author phase failed: %s", e)
+
     narration = _collect_recent_narration(db, world, start_tick)
     return {
         "ok": True,
