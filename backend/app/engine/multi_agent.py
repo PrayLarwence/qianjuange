@@ -44,7 +44,12 @@ log = logging.getLogger(__name__)
 SUBAGENT_TOOLS: list[ToolSpec] = [
     ToolSpec(
         name="speak",
-        description="说一句话或一段话。这是你公开的发言（旁人可听见）。如果你在撒谎，请如实写下你想说的内容；导演会决定旁人是否相信。",
+        description=(
+            "说一句话或一段话（旁人能听见）。"
+            "**用你这个角色独有的 voice 写**——用词、节奏、口头禅、停顿都要符合 voice 描述。"
+            "不要写成中性叙述，要让人一眼能从台词里认出是你这个角色在说话。"
+            "说谎时也如实写下你想说的内容；导演会决定旁人是否相信。"
+        ),
         parameters={
             "type": "object",
             "properties": {
@@ -71,11 +76,16 @@ SUBAGENT_TOOLS: list[ToolSpec] = [
     ),
     ToolSpec(
         name="propose_action",
-        description="提议任意非言语动作：进攻、撤退、抢夺、施法、签字……写清楚动作和对象。导演决定成败。",
+        description=(
+            "提议任意非言语动作：进攻、撤退、抢夺、施法、签字……导演决定成败。"
+            "**action 字段要写得有画面感**——不只是动作类型，还要带上你做这个动作时的神态/姿态/力度。"
+            "差例：'attack X with sword'。"
+            "好例：'横刀斜劈，肩头压低半寸，刀风没出鞘前先把对方逼退了一步'——动作里就含 voice。"
+        ),
         parameters={
             "type": "object",
             "properties": {
-                "action": {"type": "string", "description": "动作描述，如 'attack X with sword'、'plant evidence'、'cast fireball'"},
+                "action": {"type": "string", "description": "带画面感的动作描述，体现你的 voice"},
                 "target_entity_id": {"type": "string"},
                 "intensity": {"type": "string", "description": "low / medium / high"},
                 "reason":  {"type": "string"},
@@ -125,6 +135,13 @@ SUBAGENT_SYSTEM_PROMPT = """你扮演一个具体的角色。你**就是**这个
   - end_turn:        不再行动
 
 可以多次调用工具。说完做完后调用 end_turn。
+
+# 笔墨（你写出来的文字会成为故事的肉）
+
+- speak 的 text、propose_action 的 action、observe 的 text 都不是日志条目，是给读者看的小说级文字。
+- 每条至少有一个细节（手抖一下、目光的方向、语气的停顿、屋外的风），不要光写"我说"或"我做"。
+- voice 在台词措辞和动作姿态里展现，不在解说里。voice 写"沉默克制"就少话多停顿，写"市井嬉笑"就口语带玩笑，让读者读两个字就能认出是你。
+- 不要写元叙述（"这表明…"、"其实他在想…"），让动作和细节自己说话。
 
 # 风格
 

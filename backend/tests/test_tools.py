@@ -136,3 +136,38 @@ def test_end_turn_returns_ended(db, world_factory):
     w, _ = world_factory()
     res = execute_tool(db, w, "end_turn", {})
     assert res["ended"] is True
+
+
+# ---- prompt / 工具 schema 笔墨规范测试 ----
+
+def test_system_prompt_carries_writing_rules():
+    """SYSTEM_PROMPT 必须明确要求 description 含动作/神态/心理与最低字数。"""
+    from app.engine.tools import SYSTEM_PROMPT
+    # 关键词全部出现
+    for kw in ("动作", "神态", "心理", "环境锚点", "80 字"):
+        assert kw in SYSTEM_PROMPT, f"SYSTEM_PROMPT 缺少关键词: {kw}"
+    # narrate 不再被定位为"可选的点缀"，而是关键节点鼓励
+    assert "可选的点缀" not in SYSTEM_PROMPT
+    assert "叙事面板" in SYSTEM_PROMPT
+
+
+def test_add_event_tool_description_demands_prose():
+    """add_event 的 description 字段说明应明确要求小说级文字 + 字数下限 + 反例。"""
+    from app.engine.tools import TOOL_SPECS
+    spec = next(t for t in TOOL_SPECS if t.name == "add_event")
+    desc_field = spec.parameters["properties"]["description"]["description"]
+    # 必须要求长度
+    assert "80 字" in desc_field
+    # 必须给出反例和正例做对比
+    assert "反例" in desc_field and "正例" in desc_field
+    # 必须点出三个层面
+    assert "动作" in desc_field
+    assert "神态" in desc_field or "心理" in desc_field
+
+
+def test_narrate_tool_description_promotes_usage():
+    """narrate 工具说明应鼓励主动使用并给出节奏建议。"""
+    from app.engine.tools import TOOL_SPECS
+    spec = next(t for t in TOOL_SPECS if t.name == "narrate")
+    assert "100" in spec.description  # 有字数提示
+    assert "2-3" in spec.description or "关键节点" in spec.description
