@@ -65,6 +65,42 @@ chmod +x run.sh
 3. 切到 **📖 阅读** 视图看故事；切到 **🕒 时空带** 看分支结构
 4. 点工具栏 **📖 导出小说**，AI 把这条分支改写成 markdown，复制或下载
 
+## 开发与测试
+
+后端有 115+ 条 pytest 测试覆盖核心引擎、API、LLM 调用链路（用 FakeProvider 替身，不打真 LLM 不动 `data/world.db`）。
+
+```
+run-tests.bat              # Windows 一键
+```
+
+或手动：
+
+```
+cd backend
+../.venv/Scripts/python -m pytest          # 全跑
+../.venv/Scripts/python -m pytest -v       # 详细
+../.venv/Scripts/python -m pytest tests/test_tools.py   # 单文件
+```
+
+测试结构：
+
+```
+backend/tests/
+  conftest.py                      内存 SQLite + FakeProvider + world_factory + map_factory
+  test_state.py                    snapshot 序列化、prompt 字段过滤
+  test_tools.py                    execute_tool 12 个工具
+  test_api.py                      FastAPI HTTP 集成（worlds / entities / events / branches）
+  test_simulator.py                e2e: FakeProvider 脚本化驱动 run_step
+  test_executor_branch_map.py      branch_world / set_position / move_entity
+  test_executor_errors.py          缺参 / 未知 id / 自环等错误分支
+  test_consistency.py              JSON 解析 + run_scan
+  test_multi_agent.py              sub-agent intent → director 解析
+  test_novelize.py                 章节切片四种策略
+  test_persona_extract.py          persona JSON 解析 + 降级路径
+```
+
+整套跑完约 2.5 秒，无外部依赖。
+
 ## 架构
 
 ```
@@ -101,7 +137,6 @@ data/
 
 当前版本 v0.1+，下一阶段考虑：
 - 单文件大模块拆分（`routes.py` 3000+ 行、`app.js` 3500+ 行）
-- 测试覆盖（目前是端到端手测）
 - 离线包（去 CDN 依赖）
 - 角色对话风格更细粒度（按场景 / 情绪状态切换 voice）
 
