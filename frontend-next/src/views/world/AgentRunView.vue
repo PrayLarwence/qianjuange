@@ -16,6 +16,7 @@ const job = ref<JobStatus | null>(null);
 const traces = ref<AgentTrace[]>([]);
 const lastSeq = ref(0);
 const polling = ref(false);
+const cancelling = ref(false);
 const expanded = ref<Record<string, boolean>>({});
 const fullCache = ref<Record<string, { full_prompt: string; full_response: string }>>({});
 const fullDialog = ref<{ traceId: string; prompt: string; response: string } | null>(null);
@@ -37,6 +38,7 @@ async function start() {
   job.value = null;
   expanded.value = {};
   fullCache.value = {};
+  cancelling.value = false;
   try {
     const resp = await agentPipelineApi.startStep(worldId.value, {
       directive: directive.value.trim() || undefined,
@@ -85,12 +87,14 @@ async function pullTraces() {
 }
 
 async function cancel() {
-  if (!jobId.value) return;
+  if (!jobId.value || cancelling.value) return;
+  cancelling.value = true;
   try {
     await jobsApi.cancel(jobId.value);
     toast.success('已请求取消（等待当前 LLM 调用结束）');
   } catch (e: any) {
     toast.error(`取消失败：${e.message || e}`);
+    cancelling.value = false;
   }
 }
 
@@ -168,8 +172,8 @@ const verdictTone = computed(() => {
         <button class="btn btn-accent" :disabled="polling" @click="start">
           {{ polling ? '推演中…' : '启动编排推演' }}
         </button>
-        <button v-if="polling" class="btn btn-ghost hover:!text-[#b04f33]" @click="cancel">
-          停止
+        <button v-if="polling" class="btn btn-ghost hover:!text-[#b04f33]" :disabled="cancelling" @click="cancel">
+          {{ cancelling ? '取消中…' : '停止' }}
         </button>
         <a class="btn btn-ghost ml-auto text-xs"
            :href="`/worlds/${worldId}/settings`">
