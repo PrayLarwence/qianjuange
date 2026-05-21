@@ -161,31 +161,34 @@ WorldSettingsView 在 2025 年拆成了 8 个 section（每个 50–420 行）�
 
 ## 当前重构状态（2026-05）
 
-最近完成的大动作：
+最近完成（当前会话）：
 
-- **R-A**：`frontend/` 冻结
-- **R-B / R-D**：`routes.py` 拆分（2680→46 行，19 个子路由，含 agent_pipeline_api）
-- **R-C**：`WorldSettingsView` 拆分（927→77 行，8 个 section，含 AgentPipelineSection）
-- **T1（一致性）**：全链路落地——五类扫描 + scene_continuity + editor patch（apply/reject/undo）+ ReviewView 前端 + 自纠环 + 3 个测试文件
-- **Agent Pipeline**：`orchestrator.py`（629 行）编排流水线 + `agent_pipeline.py` 配置持久化 + `AgentRunView` 实时 trace viewer + `AgentTrace` 表
+**工程债全部清零**：
+- engine 31 文件 → 7 子目录 + stub 兼容
+- manuscript_chunks JSON → 独立表
+- Entity.attributes 拆出 aliases 列
+- metrics 可观测性（LlmCallMetric 表 + MetricsProvider + GET /metrics）
+- 前端测试 27 条（vitest + @vue/test-utils）
+- 导出 docx/epub
 
-待真实小说回归测试（未跑端到端）的：
-- T2-A：V1 长小说分批
-- T2-B：角色 aliases 归一
-- T2-C：因果链抽取（V2）
-- T2-D：审阅 UI 可改 participants / location
-- T3-A：Overview banner
-- T3-B：按章节范围抽取
-- T3-C：Job 中途持久化
+**功能深化**：
+- V1 异步 job（`POST /worlds/from_manuscript_async`）
+- 智能文本分割（3 级章节检测 + 字数回退）
+- 编排流水线默认启用（SimView Director→Author→Critics，预置人设+文风 critic）
+- V2 审阅原文对照（source_context 字段）
+- 推演后自动一致性检查
 
-下一批待办（按优先级）：
-1. 端到端真实小说测试（最大空缺）
-2. V1 转异步 job
-3. metrics / 可观测性
-4. engine 子目录归拢
-5. 导出 docx / epub
+**体验**：
+- 仪表盘 DashboardView（统计卡片 + metrics + 实体分布 + 事件日志 + LLM 日志）
+- 三步引导流程（导入→抽取→推演）
+- 大文件防卡死（>512KB 不塞 DOM）
+- 侧边栏 11 标签分 3 组
+- SettingsDrawer LLM + metrics 面板
 
-如果接到"一致性 / patch / scene_continuity / agent pipeline / orchestrator"相关任务，注意这些已完成，代码可直接参考。
+待真实小说回归测试：
+- T2/T3 全系列（见 README）
+
+下一批待办：端到端测试、前端测试扩展、阅读模式增强、i18n
 
 ---
 

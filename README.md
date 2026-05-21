@@ -12,7 +12,32 @@
 # 当前会话状态（给下一位 agent / 给中断后的自己）
 
 ## 已完成 — 大型结构重构（R 系列）
-代码 build 通过，397 后端测试全过，vue-tsc 0 错，vite build 干净。**没跑端到端真实小说回归**，只验证类型/编译/单测。
+代码 build 通过，397 后端测试全过，27 前端测试全过，vue-tsc 0 错，vite build 干净。**没跑端到端真实小说回归**，只验证类型/编译/单测。
+
+### 工程债清理（2026-05）
+- engine 31 文件归入 7 子目录（agents/manuscript/consistency/worldgen/core/narrative/map），旧位置 stub 兼容
+- manuscript_chunks 独立表（JSON 列迁出为 ManuscriptChunk 表，自动迁移旧数据）
+- Entity.aliases 独立列（从 attributes JSON 拆出）
+- metrics 可观测性：LlmCallMetric 表 + MetricsProvider 包装器 + `GET /metrics` 聚合查询
+- 前端测试：vitest + @vue/test-utils，27 条覆盖 stores + ConfirmDialog + Markdown
+- 导出 docx + epub：`POST /worlds/{id}/export` 新增 mode=docx|epub
+
+### 功能深化
+- V1 转异步 job：`POST /worlds/from_manuscript_async`，>10 万字自动走后台
+- 智能文本分割：3 级章节检测 + 字数回退分割（5000 字/段）
+- 编排流水线推至前台：SimView 默认 Director→Author→Critics 模式，预置人设+文风 2 个 critic
+- V2 审阅增强：每个草稿事件可展开原文 200 字对照
+- 推演后自动一致性检查，SimView 顶栏显示待处理问题数
+- SettingsDrawer：LLM 配置面板（provider/model/key/测试连接）+ 24h metrics 统计
+
+### 体验优化
+- **仪表盘**（DashboardView）：世界统计 + LLM metrics + 实体分布 + 最近事件 + LLM 调用日志
+- **三步引导**：导入→抽取→推演，当前步高亮
+- **大文件导入**：>512KB 不塞 textarea，>10 万字自动走异步 job，顶部 spinner 实时进度
+- 侧边栏分组：创作（仪表盘/推演/阅读）· 世界（角色/设定库/设置）· 分析（审阅/图谱/时间轴/地图/故事板）
+- 手稿横幅直接跳转抽取区
+- 文件选择器无格式限制
+- 风格绑定提醒
 
 ### R-A：冻结老 frontend/
 `frontend/` 目录加 `FROZEN.md`。新功能只进 `frontend-next/`。
@@ -119,13 +144,9 @@ cd frontend-next && npm run dev                     # 前端
 
 ## 下一批待办
 1. **端到端真实小说测试**（最大空缺）：找一本 100k+ 字中文小说，跑完整 V1→V2→审阅→续写→导出，记录阻断性 bug
-2. ~~V1 转异步 job~~  ✅ 已完成：`POST /worlds/from_manuscript_async` + job 轮询，长小说不超时
-3. **metrics / 可观测性**：LLM 调用计数、token 消耗、latency 追踪（当前完全没有）
-4. **engine 子目录归拢**：31 个文件仍然扁平，按 agents / manuscript / consistency / core / worldgen 分组
-5. **导出 docx / epub**
-6. **前端测试**：0 条 Vue 测试
-7. **manuscript_chunks 独立表**：百万字小说存 JSON 列不健康
-8. **Entity.attributes JSON 拆列**：aliases / persona 碎片混在一团
+2. **前端测试扩展**：当前 27 条覆盖 stores + 2 组件，View 层仍无测试
+3. **阅读模式增强**：连续滚动不分页、暗色阅读主题
+4. **多语言 i18n**：当前只有中文
 
 ---
 
@@ -135,9 +156,11 @@ cd frontend-next && npm run dev                     # 前端
 - **推演**：实体 / 事件 / 因果 / 多分支 / AI 工具调用
 - **视图**：因果图（cytoscape+dagre）/ 时空带（vis-timeline）/ 阅读视图 / 章节标记
 - **AI**：角色 sub-agent + 导演、persona 萃取、一致性扫描 + editor patch、角色弧光、关系图谱、POV 改写
-- **多 Agent 编排**：director→author→critics 流水线，可配置 parallel/serial 审稿 + 重试 + 预算控制，实时 trace 查看
+- **多 Agent 编排**：Director→Author→Critics 流水线（SimView 默认模式），人设审查+文风审查自动把关，不通过自动重写
+- **仪表盘**：世界统计 + LLM token/延迟/错误 metrics + 实体分布 + 事件时间线 + 调用日志
+- **智能导入**：3 级章节检测 + 字数回退分割；>10 万字异步后台；大文件不卡死
+- **导出**：Markdown / JSON / DOCX / EPUB
 - **世界生成**：模板系统、Voronoi 程序化地图
-- **导出**：小说 Markdown、JSON 备份
 - **手稿反向构建（V1+V2）**：上传现有小说 → 抽骨架 → 抽事件草稿 → 审阅落库 → 继续推演
 
 ## 架构
@@ -147,7 +170,8 @@ backend/app/
   providers/   Claude / OpenAI / DeepSeek / Ollama
   engine/      推演引擎、工具集、小说化、一致性、地图、persona
                manuscript_ingest（V1）、manuscript_events（V2）
-               orchestrator（Agent 编排流水线）、agent_pipeline（流水线配置）
+               orchestrator（编排流水线）、agent_pipeline（配置）
+               metrics（LLM 调用记录）
   api/         FastAPI 路由 — routes.py 仅 46 行 router 聚合
                业务端点拆在 *_api.py 子模块（见下）
 frontend-next/  Vue 3 + Vite + TS（新前端，主用）

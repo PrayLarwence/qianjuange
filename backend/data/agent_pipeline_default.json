@@ -1,28 +1,31 @@
 {
   "directors": [
-    {"name": "director", "model": "", "system_prompt_extra": "你是小说导演，负责推进剧情。写出有张力、有细节的事件。", "max_hops": 8}
+    {
+      "name": "custom",
+      "model": "",
+      "system_prompt_extra": "",
+      "max_hops": 8
+    }
   ],
   "authors": [
-    {"name": "author", "model": "", "system_prompt_extra": "你是小说作者，把事件改写成生动的叙事散文。用具体描写代替抽象概括。避免'突然''于是''接着'等流水账连接词。严格遵循绑定风格档案的语感。"}
+    {
+      "name": "my-author",
+      "model": "",
+      "system_prompt_extra": ""
+    }
   ],
   "critics": [
     {
-      "name": "人设审查",
+      "name": "strict-critic",
       "model": "",
-      "focus": "检查角色言行是否与已建立的性格、动机、说话风格一致。角色不能突然改变态度、能力或价值观而没有合理过渡。发现偏离时指出具体矛盾点。",
-      "severity": "normal"
-    },
-    {
-      "name": "文风审查",
-      "model": "",
-      "focus": "检查文字是否有'AI味'：句子结构是否过于单调（全是主语+谓语+宾语）、是否滥用'突然''于是''接着'等机械连接词、描写是否空洞（只有标签没有细节）、节奏是否平铺直叙。好的文字应该有长短句交替、感官细节、留白。",
-      "severity": "normal"
+      "focus": "",
+      "severity": "strict"
     }
   ],
-  "max_critic_retries": 2,
+  "max_critic_retries": 4,
   "critic_mode": "parallel",
   "budget": {
-    "max_llm_calls": 15,
+    "max_llm_calls": 20,
     "max_wall_seconds": 300
   }
 }
