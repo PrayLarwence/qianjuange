@@ -19,7 +19,8 @@
       "name": "strict-critic",
       "model": "",
       "focus": "",
-      "severity": "strict"
+      "severity": "strict",
+      "kind": "general"
     }
   ],
   "max_critic_retries": 4,

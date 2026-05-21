@@ -134,12 +134,22 @@ def _build_critic_user_prompt(
     final_text: str,
     directive: Optional[str],
     previous_round: Optional[dict] = None,
+    arc_context: Optional[str] = None,
 ) -> str:
     parts = []
     if directive:
         parts.append(f"# 用户本回合指令\n{directive}")
     parts.append(f"# 你的关注点（focus）\n{critic.focus or '（无特别关注，请整体把关）'}")
     parts.append(f"# 严格度\n{critic.severity}")
+    if critic.kind == "arc" and arc_context and arc_context.strip():
+        parts.append(
+            "# 前文章节回顾（按时间顺序，主线发展）\n"
+            f"{arc_context.strip()}\n"
+            "（你是 arc critic：在判断本段定稿时，请额外检查"
+            "1) 是否与前文设定 / 已发生事件冲突；"
+            "2) 是否推进或至少不阻碍主线。"
+            "纯文笔 / 节奏问题不归你管，让其它 critic 评。）"
+        )
     if previous_round:
         prev_v = previous_round.get("verdict", "")
         prev_r = previous_round.get("reason", "")
@@ -198,13 +208,14 @@ def _run_one_critic(
     budget: _Budget,
     cancel_check: Optional[Callable[[], bool]] = None,
     previous_round: Optional[dict] = None,
+    arc_context: Optional[str] = None,
 ) -> tuple[dict, AgentTrace]:
     if cancel_check and cancel_check():
         from ..core.simulator import CancelledError
         raise CancelledError()
     budget.check()
 
-    user_prompt = _build_critic_user_prompt(critic, final_text, directive, previous_round)
+    user_prompt = _build_critic_user_prompt(critic, final_text, directive, previous_round, arc_context)
     started = datetime.utcnow()
     t0 = time.monotonic()
     err_msg = ""
@@ -252,6 +263,8 @@ def _run_one_critic(
             "severity": critic.severity,
             "error": err_msg or None,
             "prev_round_used": bool(previous_round),
+            "kind": critic.kind,
+            "arc_context_used": bool(arc_context and arc_context.strip()) if critic.kind == "arc" else False,
         },
         started_at=started,
         ended_at=datetime.utcnow(),
@@ -549,6 +562,15 @@ def run_orchestrated_step(
             )
         else:
             prev_by_critic: dict[str, dict] = {}
+            # arc critic 需要章节回顾。任一 critic 是 arc kind 才算一次 build（避免无谓 IO）
+            arc_context: Optional[str] = None
+            if any(c.kind == "arc" for c in cfg.critics):
+                from ..narrative.recap import build_chapter_recap_block
+                try:
+                    arc_context = build_chapter_recap_block(db, world)
+                except Exception as e:  # 不让 recap 故障阻断推演
+                    log.warning("build_chapter_recap_block failed: %s", e)
+                    arc_context = ""
             for iter_idx in range(cfg.max_critic_retries + 1):
                 critic_rounds = iter_idx + 1
                 feedback: list[dict] = []
@@ -561,6 +583,7 @@ def run_orchestrated_step(
                                 db, job_id, world, seq, iter_idx, c,
                                 final_text, user_directive, critic_provider, budget, cancel_check,
                                 previous_round=prev_by_critic.get(c.name),
+                                arc_context=arc_context if c.kind == "arc" else None,
                             )
                         except BudgetExhausted:
                             final_verdict = "budget_exhausted"
@@ -590,6 +613,7 @@ def run_orchestrated_step(
                                 db, job_id, world, seq, iter_idx, c,
                                 final_text, user_directive, critic_provider, budget, cancel_check,
                                 previous_round=prev_by_critic.get(c.name),
+                                arc_context=arc_context if c.kind == "arc" else None,
                             )
                         except BudgetExhausted:
                             final_verdict = "budget_exhausted"

@@ -52,6 +52,8 @@ class CriticAgent(BaseModel):
     model: str = ""
     focus: str = Field(default="", max_length=500)  # 自然语言描述这个 critic 关注什么
     severity: Literal["lenient", "normal", "strict"] = "normal"
+    # general = 只看这一段定稿; arc = 额外吃章节 recap, 关切跨 tick 一致性 / 主线推进
+    kind: Literal["general", "arc"] = "general"
 
 
 class BudgetConfig(BaseModel):

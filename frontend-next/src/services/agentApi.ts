@@ -26,6 +26,7 @@ export interface CriticAgent {
   temperature: number;
   focus: string;
   severity: CriticSeverity;
+  kind?: 'general' | 'arc';
 }
 
 export interface BudgetConfig {
@@ -160,5 +161,15 @@ export function emptyAuthor(): AuthorAgent {
   return { name: 'author', model: '', temperature: 0.7 };
 }
 export function emptyCritic(): CriticAgent {
-  return { name: '审稿人', model: '', temperature: 0.3, focus: '', severity: 'normal' };
+  return { name: '审稿人', model: '', temperature: 0.3, focus: '', severity: 'normal', kind: 'general' };
+}
+export function emptyArcCritic(): CriticAgent {
+  return {
+    name: 'Arc 审稿',
+    model: '',
+    temperature: 0.3,
+    focus: '是否与前文章节冲突；是否推进主线（不要管文笔/节奏）',
+    severity: 'normal',
+    kind: 'arc',
+  };
 }

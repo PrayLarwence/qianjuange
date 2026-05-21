@@ -576,3 +576,107 @@ def test_query_pipeline_metrics_aggregates(db, world_factory):
     assert by["fail"] == 3
     assert len(m["recent_forced"]) == 1
     assert m["recent_forced"][0]["unresolved_count"] == 1
+
+
+# ===== Arc critic 注入章节 recap =====
+
+def _make_chapter(db, branch_id, tick, title, summary):
+    from app.models import ChapterMarker
+    import uuid
+    cm = ChapterMarker(
+        id=f"cm_{uuid.uuid4().hex[:8]}",
+        branch_id=branch_id, tick=tick, title=title, summary=summary,
+    )
+    db.add(cm)
+    return cm
+
+
+def test_arc_critic_receives_chapter_recap(db, world_factory):
+    """arc kind 的 critic prompt 应含 build_chapter_recap_block 输出；general critic 不应含。"""
+    w, br = world_factory()
+    _bind_style(db, w)
+    _make_chapter(db, br.id, tick=2, title="序章", summary="林冲告别家人，独自上路")
+    _make_chapter(db, br.id, tick=5, title="第一章", summary="林冲在城外遇到神秘剑客")
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="general"), CriticAgent(name="arc1", kind="arc")],
+        max_critic_retries=0,
+    )
+    p = _director_then_critics_provider(
+        critic_responses=[
+            '{"verdict":"pass","score":8,"reason":"ok","suggestions":""}',
+            '{"verdict":"pass","score":8,"reason":"ok","suggestions":""}',
+        ],
+        critics_per_round=2,
+    )
+    res = run_orchestrated_step(db, w, "测试", job_id="j_arc1", cfg=cfg, provider=p)
+    assert res["final_verdict"] == "pass"
+
+    arc_trace = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_arc1",
+                AgentTrace.role == "critic",
+                AgentTrace.agent_name == "arc1")
+        .first()
+    )
+    gen_trace = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_arc1",
+                AgentTrace.role == "critic",
+                AgentTrace.agent_name == "general")
+        .first()
+    )
+    assert arc_trace is not None and gen_trace is not None
+    assert "前文章节回顾" in arc_trace.full_prompt
+    assert "林冲告别家人" in arc_trace.full_prompt
+    assert "前文章节回顾" not in gen_trace.full_prompt
+    assert (arc_trace.extra or {}).get("arc_context_used") is True
+    assert (arc_trace.extra or {}).get("kind") == "arc"
+    assert (gen_trace.extra or {}).get("arc_context_used") is False
+    assert (gen_trace.extra or {}).get("kind") == "general"
+
+
+def test_arc_critic_no_chapters_does_not_inject_block(db, world_factory):
+    """没有任何章节 summary 时，arc critic prompt 不应出现 # 前文章节回顾 标题。"""
+    w, _ = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="arc_only", kind="arc")],
+        max_critic_retries=0,
+    )
+    p = _director_then_critics_provider(
+        critic_responses=['{"verdict":"pass","score":8,"reason":"ok","suggestions":""}'],
+    )
+    res = run_orchestrated_step(db, w, "测试", job_id="j_arc2", cfg=cfg, provider=p)
+    assert res["final_verdict"] == "pass"
+
+    tr = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_arc2", AgentTrace.role == "critic")
+        .first()
+    )
+    assert "前文章节回顾" not in tr.full_prompt
+    assert (tr.extra or {}).get("arc_context_used") is False
+
+
+def test_arc_critic_kind_serialized_round_trip():
+    """CriticAgent.kind=arc 经 model_dump → model_validate 应保留。"""
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="x", kind="arc")],
+    )
+    raw = cfg.model_dump()
+    assert raw["critics"][0]["kind"] == "arc"
+    re = PipelineConfig.model_validate(raw)
+    assert re.critics[0].kind == "arc"
+    # 默认应是 general
+    cfg2 = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="y")],
+    )
+    assert cfg2.critics[0].kind == "general"

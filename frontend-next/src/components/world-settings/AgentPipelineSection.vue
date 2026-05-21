@@ -3,7 +3,7 @@ import { onMounted, ref, watch } from 'vue';
 import {
   agentPipelineApi,
   type PipelineConfig, type PipelineLimits,
-  type CriticAgent, emptyCritic,
+  type CriticAgent, emptyCritic, emptyArcCritic,
 } from '@/services/agentApi';
 import type { WorldDetail } from '@/services/api';
 import { useToastStore } from '@/stores/toast';
@@ -47,6 +47,20 @@ function addCritic() {
     return;
   }
   cfg.value.critics.push(emptyCritic());
+  markDirty();
+}
+
+function addArcCritic() {
+  if (!cfg.value || !limits.value) return;
+  if (cfg.value.critics.length >= limits.value.max_critics) {
+    toast.error(`最多 ${limits.value.max_critics} 个 critic`);
+    return;
+  }
+  if (cfg.value.critics.some(c => c.kind === 'arc')) {
+    toast.error('已有一个 arc critic（同类只需一个）');
+    return;
+  }
+  cfg.value.critics.push(emptyArcCritic());
   markDirty();
 }
 
@@ -161,8 +175,15 @@ const severityOptions: { value: CriticAgent['severity']; label: string; hint: st
       <div class="border-t border-border pt-4 space-y-3">
         <div class="flex items-center justify-between">
           <p class="text-xs text-muted">Critics（审稿，fail 触发 author 重写）</p>
-          <button class="btn btn-ghost text-xs" @click="addCritic"
-                  :disabled="cfg.critics.length >= limits.max_critics">+ 添加</button>
+          <div class="flex items-center gap-1">
+            <button class="btn btn-ghost text-xs" @click="addCritic"
+                    :disabled="cfg.critics.length >= limits.max_critics">+ 添加</button>
+            <button class="btn btn-ghost text-xs" @click="addArcCritic"
+                    :disabled="cfg.critics.length >= limits.max_critics || cfg.critics.some(c => c.kind === 'arc')"
+                    title="Arc critic 会额外吃章节回顾, 检查跨 tick 一致性 / 主线推进">
+              + Arc 模板
+            </button>
+          </div>
         </div>
 
         <div v-if="cfg.critics.length === 0" class="text-xs text-muted">
@@ -171,6 +192,9 @@ const severityOptions: { value: CriticAgent['severity']; label: string; hint: st
 
         <div v-for="(c, i) in cfg.critics" :key="i" class="surface rounded p-3 space-y-2 border border-border">
           <div class="flex items-center gap-2">
+            <span v-if="c.kind === 'arc'"
+                  class="px-1.5 py-0.5 rounded text-[10px] bg-accent/15 text-accent shrink-0"
+                  title="Arc critic：吃章节回顾，关切跨 tick 一致性 / 主线推进">ARC</span>
             <input v-model="c.name" @input="markDirty" placeholder="critic 名称（如：语感、人设、节奏）"
                    class="input flex-1 text-sm" />
             <button class="btn btn-ghost text-xs hover:!text-[#b04f33]"
@@ -182,7 +206,14 @@ const severityOptions: { value: CriticAgent['severity']; label: string; hint: st
                       placeholder="比如：人物语言是否符合身份、情节节奏是否拖沓"
                       class="input w-full text-sm"></textarea>
           </div>
-          <div class="grid grid-cols-3 gap-2">
+          <div class="grid grid-cols-4 gap-2">
+            <div>
+              <label class="text-xs text-muted">类型</label>
+              <select v-model="c.kind" @change="markDirty" class="input w-full text-sm">
+                <option value="general">普通</option>
+                <option value="arc">Arc（吃章节回顾）</option>
+              </select>
+            </div>
             <div>
               <label class="text-xs text-muted">严格度</label>
               <select v-model="c.severity" @change="markDirty" class="input w-full text-sm">
