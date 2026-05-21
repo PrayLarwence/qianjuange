@@ -6,6 +6,7 @@ import {
   type WorldDetail, type WorldEntity, type WorldEvent,
   type DirectiveSuggestion, type StepResult, type JobToolCall,
 } from '@/services/api';
+import { agentPipelineApi, type AgentTrace } from '@/services/agentApi';
 import { useToastStore } from '@/stores/toast';
 import { useJob } from '@/composables/useJob';
 
@@ -101,6 +102,8 @@ const newEvents = ref<WorldEvent[]>([]);
 const runStartedTick = ref(0);
 const runError = ref('');
 const openIssues = ref(0);
+const useOrchestrated = ref(true);  // 默认使用编排流水线
+const orchestrTraces = ref<AgentTrace[]>([]);
 
 async function checkConsistency() {
   try {
@@ -112,7 +115,12 @@ async function checkConsistency() {
   } catch { /* noop */ }
 }
 
+async function streamPollJob(jobId: string): Promise<any> {
+  return fetch(`/api/jobs/${jobId}`).then(r => r.json());
+}
+
 function resetRunState() {
+  orchestrTraces.value = [];
   liveToolCalls.value = [];
   liveNarration.value = '';
   lastResult.value = null;
@@ -167,6 +175,52 @@ async function runSingle() {
   running.value = true;
   currentMode.value = 'single';
   runStartedTick.value = world.value?.current_tick ?? 0;
+
+  if (useOrchestrated.value) {
+    // 编排模式：Director→Author→Critics
+    phaseMessage.value = '导演构思中…';
+    try {
+      const { job_id } = await agentPipelineApi.startStep(worldId.value, {
+        directive: directive.value.trim() || undefined,
+      });
+      let lastSeq = 0;
+      const pollTimer = setInterval(async () => {
+        try {
+          const t = await agentPipelineApi.traces(job_id, lastSeq);
+          if (t.traces.length) {
+            orchestrTraces.value.push(...t.traces);
+            lastSeq = Math.max(...t.traces.map(tr => tr.seq));
+            const latest = t.traces[t.traces.length - 1];
+            phaseMessage.value = `${latest.role === 'critic' ? '审稿中' : latest.role === 'author' ? '写作中' : '导演中'} · ${latest.agent_name}`;
+          }
+        } catch {}
+        try {
+          const j = await streamPollJob(job_id);
+          if (j.status === 'completed' || j.status === 'error' || j.status === 'cancelled') {
+            clearInterval(pollTimer);
+            if (j.status === 'completed') {
+              lastResult.value = j.result as StepResult || null;
+              if ((j.result as any)?.narration) liveNarration.value = (j.result as any).narration;
+              await refreshAfterRun(lastResult.value || undefined);
+              checkConsistency();
+              toast.success(`编排推演完成 · ${j.result?.critic_rounds || 0} 轮审稿`);
+            } else {
+              runError.value = j.progress_message || j.error || '编排推演失败';
+              toast.error(runError.value);
+            }
+            running.value = false;
+          }
+        } catch {}
+      }, 1000);
+    } catch (e: any) {
+      runError.value = e.message || String(e);
+      toast.error(`编排推演失败：${runError.value}`);
+      running.value = false;
+    }
+    return;
+  }
+
+  // 简单模式
   phaseMessage.value = '推演中…';
   try {
     const r = await simApi.step(worldId.value, {
@@ -381,6 +435,14 @@ function toolArgPreview(c: JobToolCall): string {
 
           <!-- 操作按钮 -->
           <section class="space-y-2 pt-2 border-t border-border">
+            <div class="flex items-center justify-between text-xs mb-1">
+              <span class="text-muted">编排模式</span>
+              <button class="px-2 py-0.5 rounded text-xs transition-colors"
+                      :class="useOrchestrated ? 'bg-accent text-white' : 'bg-sunken text-muted'"
+                      @click="useOrchestrated = !useOrchestrated">
+                {{ useOrchestrated ? 'Director→Author→Critics' : '单 Agent' }}
+              </button>
+            </div>
             <button class="btn btn-accent w-full justify-center"
                     :disabled="!canRun"
                     @click="runSingle">
@@ -458,7 +520,24 @@ function toolArgPreview(c: JobToolCall): string {
         </div>
 
         <!-- 实时阶段 + 工具调用流 -->
-        <section v-if="running || liveToolCalls.length > 0 || liveNarration" class="mb-10">
+        <section v-if="running || liveToolCalls.length > 0 || liveNarration || orchestrTraces.length > 0" class="mb-10">
+          <!-- 编排 trace -->
+          <div v-if="orchestrTraces.length > 0" class="mb-4">
+            <p class="text-muted text-xs uppercase tracking-wider mb-2">编排流水线</p>
+            <div class="space-y-1">
+              <div v-for="t in orchestrTraces" :key="t.id"
+                   class="surface rounded px-3 py-1.5 flex items-center gap-2 text-xs">
+                <span class="w-16 text-muted">{{ t.role }}</span>
+                <span class="w-20 truncate">{{ t.agent_name }}</span>
+                <span class="flex-1 text-muted truncate">{{ t.input_summary }}</span>
+                <span v-if="t.verdict" :class="t.verdict === 'pass' ? 'text-green-600' : 'text-[#b04f33]'">
+                  {{ t.verdict === 'pass' ? '✓' : '✕' }}
+                </span>
+                <span v-if="t.status === 'running'" class="text-accent animate-pulse">…</span>
+              </div>
+            </div>
+          </div>
+
           <div v-if="running" class="surface rounded p-4 mb-4 flex items-center gap-3">
             <span class="w-2 h-2 rounded-full bg-accent animate-pulse" />
             <span class="text-sm">{{ phaseMessage || '推演中…' }}</span>
