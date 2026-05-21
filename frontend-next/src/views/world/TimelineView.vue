@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { timelineApi, worldsApi,
   type TimelineEvent, type PlotThread, type CausalLinkEdge } from '@/services/api';
@@ -241,9 +241,40 @@ async function load() {
 onMounted(async () => {
   await load();
   setupResize();
+  applyRouteQuery();
 });
 onBeforeUnmount(() => { ro?.disconnect(); });
 watch(includeDrafts, load);
+watch(() => [route.query.tick, route.query.event, route.query.character], applyRouteQuery);
+
+function applyRouteQuery() {
+  const q = route.query;
+  const eventId = typeof q.event === 'string' ? q.event : '';
+  const tickStr = typeof q.tick === 'string' ? q.tick : '';
+  const characterId = typeof q.character === 'string' ? q.character : '';
+
+  if (eventId && eventsById.value[eventId]) {
+    selectedEventId.value = eventId;
+    selectedThreadId.value = null;
+    nextTick(() => jumpToTick(eventsById.value[eventId].tick));
+    return;
+  }
+  if (tickStr) {
+    const t = Number(tickStr);
+    if (Number.isFinite(t)) nextTick(() => jumpToTick(t));
+    return;
+  }
+  if (characterId) {
+    const ev = events.value
+      .filter(e => e.participants?.includes(characterId))
+      .sort((a, b) => a.tick - b.tick)[0];
+    if (ev) {
+      selectedEventId.value = ev.id;
+      selectedThreadId.value = null;
+      nextTick(() => jumpToTick(ev.tick));
+    }
+  }
+}
 
 function selectEvent(id: string) { selectedEventId.value = id; selectedThreadId.value = null; }
 function selectThread(id: string) { selectedThreadId.value = id; selectedEventId.value = null; }

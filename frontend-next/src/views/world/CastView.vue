@@ -57,7 +57,10 @@ async function load() {
       }
     }
     lastSeenByEntity.value = seen;
-    if (selectedId.value && !entities.value.find(e => e.id === selectedId.value)) {
+    const queryId = (route.query.id as string | undefined) || '';
+    if (queryId && entities.value.some(e => e.id === queryId)) {
+      selectedId.value = queryId;
+    } else if (selectedId.value && !entities.value.find(e => e.id === selectedId.value)) {
       selectedId.value = null;
     }
     if (!selectedId.value && entities.value.length > 0) {
@@ -72,6 +75,11 @@ async function load() {
 }
 onMounted(load);
 watch(worldId, () => { selectedId.value = null; load(); });
+watch(() => route.query.id, (id) => {
+  if (typeof id === 'string' && id && entities.value.some(e => e.id === id)) {
+    selectedId.value = id;
+  }
+});
 
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase();
