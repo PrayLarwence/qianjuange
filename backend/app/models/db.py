@@ -1,5 +1,5 @@
 from pathlib import Path
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
@@ -11,6 +11,18 @@ engine = create_engine(
     connect_args={"check_same_thread": False},
     future=True,
 )
+
+
+@event.listens_for(engine, "connect")
+def _sqlite_pragma(dbapi_conn, _conn_record):
+    cur = dbapi_conn.cursor()
+    try:
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA busy_timeout=5000")
+    finally:
+        cur.close()
+
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
 
@@ -39,7 +51,6 @@ def _migrate() -> None:
     with engine.begin() as conn:
         try:
             conn.exec_driver_sql("PRAGMA journal_mode=WAL")
-            conn.exec_driver_sql("PRAGMA busy_timeout=5000")
         except Exception:
             pass
         # Entity.aliases 独立列（从 attributes JSON 迁出）
