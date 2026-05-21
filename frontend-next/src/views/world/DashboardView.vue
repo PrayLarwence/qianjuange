@@ -158,6 +158,69 @@ function fmt(n: number | undefined): string {
           <div class="text-xs text-muted mt-1">手稿、风格、Agent 配置</div>
         </router-link>
       </div>
+
+      <!-- 实体分布 -->
+      <h2 class="text-sm uppercase tracking-wider text-muted mt-8 mb-3">实体分布</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-8">
+        <div class="stat-card">
+          <div class="text-xs text-muted mb-3">角色 ({{ entities.chars.length }})</div>
+          <div v-if="entities.chars.length" class="space-y-1">
+            <div v-for="c in entities.chars.slice(0, 8)" :key="c.id" class="flex justify-between text-sm">
+              <span class="truncate mr-2">{{ c.name }}</span>
+              <span class="text-muted flex-shrink-0">{{ c.alive ? '' : '已逝' }}</span>
+            </div>
+            <div v-if="entities.chars.length > 8" class="text-xs text-muted">
+              …及其他 {{ entities.chars.length - 8 }} 个角色
+            </div>
+          </div>
+          <div v-else class="text-xs text-muted">暂无角色</div>
+        </div>
+        <div class="stat-card">
+          <div class="text-xs text-muted mb-3">地点 ({{ entities.locs.length }})</div>
+          <div v-if="entities.locs.length" class="space-y-1">
+            <div v-for="l in entities.locs.slice(0, 8)" :key="l.id" class="text-sm truncate">{{ l.name }}</div>
+            <div v-if="entities.locs.length > 8" class="text-xs text-muted">
+              …及其他 {{ entities.locs.length - 8 }} 个地点
+            </div>
+          </div>
+          <div v-else class="text-xs text-muted">暂无地点</div>
+        </div>
+      </div>
+
+      <!-- 最近事件 -->
+      <h2 class="text-sm uppercase tracking-wider text-muted mb-3">最近事件</h2>
+      <div class="stat-card mb-8">
+        <div v-if="(snapshot?.events || []).length" class="space-y-2">
+          <div v-for="ev in (snapshot.events || []).slice(-8).reverse()" :key="ev.id"
+               class="flex items-start gap-3 text-sm py-1 border-b border-border/30 last:border-0">
+            <span class="text-muted font-mono text-xs flex-shrink-0 w-20">tick {{ ev.tick }}</span>
+            <span class="font-medium truncate">{{ ev.title }}</span>
+            <span v-if="ev.participants?.length" class="text-xs text-muted ml-auto flex-shrink-0">
+              {{ ev.participants.length }}人
+            </span>
+          </div>
+        </div>
+        <div v-else class="text-xs text-muted">暂无事件 — 开始推演吧</div>
+      </div>
+
+      <!-- 最近 LLM 调用 -->
+      <h2 class="text-sm uppercase tracking-wider text-muted mb-3">最近 LLM 调用</h2>
+      <div class="stat-card">
+        <div v-if="metrics?.recent?.length" class="space-y-1">
+          <div v-for="r in metrics.recent.slice(0, 10)" :key="r.id"
+               class="flex items-center gap-3 text-xs py-1 border-b border-border/20 last:border-0">
+            <span class="w-16 text-muted flex-shrink-0">{{ r.provider }}</span>
+            <span class="w-20 text-muted flex-shrink-0 truncate">{{ r.kind || '—' }}</span>
+            <span class="flex-shrink-0">{{ (r.tokens_in || 0) + (r.tokens_out || 0) }} tok</span>
+            <span class="flex-shrink-0">{{ r.latency_ms }}ms</span>
+            <span :class="r.status === 'error' ? 'text-red-500' : 'text-green-600'" class="flex-shrink-0 ml-auto">
+              {{ r.status === 'error' ? '✕' : '✓' }}
+            </span>
+            <span class="text-muted hidden md:inline">{{ new Date(r.created_at).toLocaleTimeString() }}</span>
+          </div>
+        </div>
+        <div v-else class="text-xs text-muted">暂无调用记录</div>
+      </div>
     </template>
   </div>
 </template>
