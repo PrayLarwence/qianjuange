@@ -373,7 +373,7 @@ function goSettings(section: string) {
           <div v-if="entities.chars.length" class="space-y-1">
             <div v-for="c in entities.chars.slice(0, 8)" :key="c.id" class="flex justify-between text-sm">
               <span class="truncate mr-2">{{ c.name }}</span>
-              <span v-if="!c.alive" class="text-[#b04f33] flex-shrink-0">已逝</span>
+              <span v-if="c.alive === 0" class="text-[#b04f33] flex-shrink-0">已逝</span>
             </div>
             <div v-if="entities.chars.length > 8" class="text-xs text-muted">
               …及其他 {{ entities.chars.length - 8 }} 个角色

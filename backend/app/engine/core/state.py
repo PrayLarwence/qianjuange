@@ -28,6 +28,7 @@ def _entity_full(e: Entity) -> dict:
         "memories": e.memories or [],
         "tags": list(e.tags or []),
         "pinned": int(e.pinned or 0),
+        "alive": int(e.alive if e.alive is not None else 1),
     }
 
 
@@ -200,7 +201,7 @@ def _load_outline_block(db: Session, world: World) -> Optional[dict]:
 
 def build_state_snapshot(db: Session, world: World, max_events: int = 30, max_entities: int = 80) -> dict:
     branch_id = active_branch_id(world)
-    entities = db.query(Entity).filter_by(branch_id=branch_id, alive=1).limit(max_entities).all()
+    entities = db.query(Entity).filter_by(branch_id=branch_id).limit(max_entities).all()
     events = (
         db.query(Event)
         .filter_by(branch_id=branch_id, deleted=0)
@@ -254,7 +255,7 @@ def build_state_snapshot(db: Session, world: World, max_events: int = 30, max_en
         ],
         "recent_narration": [n.text for n in reversed(recent_narration)],
     }
-    map_summary = _build_map_summary(world.id, entities)
+    map_summary = _build_map_summary(world.id, [e for e in entities if (e.alive or 0) != 0])
     if map_summary is not None:
         snapshot["map"] = map_summary
     outline_block = _load_outline_block(db, world)
@@ -444,13 +445,14 @@ def state_as_prompt(snapshot: dict) -> str:
         if m.get("entities_on_map"):
             parts.append("当前位于地图上的实体:")
             parts.append(json.dumps(m["entities_on_map"], ensure_ascii=False, indent=2))
-    quickref = _persona_quickref(snapshot["entities"])
+    quickref = _persona_quickref([e for e in snapshot["entities"] if e.get("alive", 1) != 0])
     if quickref:
         parts.append(quickref)
     recent_event_ids = {ev.get("id") for ev in snapshot.get("recent_events", []) if ev.get("id")}
-    parts.append(f"\n## 实体（{len(snapshot['entities'])}）")
+    alive_entities = [e for e in snapshot["entities"] if e.get("alive", 1) != 0]
+    parts.append(f"\n## 实体（{len(alive_entities)}）")
     parts.append(json.dumps(
-        [_entity_for_prompt(e, recent_event_ids=recent_event_ids) for e in snapshot["entities"]],
+        [_entity_for_prompt(e, recent_event_ids=recent_event_ids) for e in alive_entities],
         ensure_ascii=False, indent=2,
     ))
     parts.append(f"\n## 近期事件（{len(snapshot['recent_events'])}，按时间升序）")

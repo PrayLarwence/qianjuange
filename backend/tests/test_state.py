@@ -87,7 +87,7 @@ def test_build_state_snapshot_with_entity(db, world_factory):
 
 
 def test_build_state_snapshot_skips_dead(db, world_factory):
-    from app.engine.core.state import build_state_snapshot
+    from app.engine.core.state import build_state_snapshot, state_as_prompt
     from app.models import Entity
     w, br = world_factory()
     db.add(Entity(id="dead", branch_id=br.id, type="character",
@@ -98,9 +98,12 @@ def test_build_state_snapshot_skips_dead(db, world_factory):
                   alive=1, created_at_tick=0))
     db.commit()
     snap = build_state_snapshot(db, w)
-    names = {e["name"] for e in snap["entities"]}
-    assert "幸存者" in names
-    assert "阵亡者" not in names
+    by_name = {e["name"]: e for e in snap["entities"]}
+    assert "幸存者" in by_name and by_name["幸存者"]["alive"] == 1
+    assert "阵亡者" in by_name and by_name["阵亡者"]["alive"] == 0
+    prompt = state_as_prompt(snap)
+    assert "幸存者" in prompt
+    assert "阵亡者" not in prompt
 
 
 # ---- persona 进 prompt ----
