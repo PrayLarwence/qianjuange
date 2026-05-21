@@ -80,9 +80,12 @@ async function load() {
     if (fb) for (const it of fb.items) map[it.chapter_id] = it.feedback;
     feedbackByChapter.value = map;
     loadManuscriptCache();
-    if (manuscript.value.length > 0 && mode.value === 'events') {
+    // 带 ?c= 跳转过来的就是想看事件流, 不要被手稿缓存劫持
+    if (!queryC && manuscript.value.length > 0 && mode.value === 'events') {
       mode.value = 'manuscript';
     }
+    // 选中后把侧栏滚到该章
+    nextTick(() => scrollSidebarToSelected());
   } catch (e: any) {
     err.value = e.message || String(e);
   } finally {
@@ -91,6 +94,22 @@ async function load() {
 }
 onMounted(load);
 watch(worldId, () => { selectedId.value = null; load(); });
+
+watch(() => route.query.c, (cid) => {
+  // 同一世界内反复从看板点不同章节: load() 不会重跑, 这里直接同步
+  if (typeof cid === 'string' && cid && chapters.value.some(c => c.id === cid)) {
+    selectedId.value = cid;
+    if (mode.value !== 'events') mode.value = 'events';
+    nextTick(() => scrollSidebarToSelected());
+  }
+});
+
+function scrollSidebarToSelected() {
+  const id = selectedId.value;
+  if (!id) return;
+  const el = document.querySelector(`[data-chapter-row="${id}"]`) as HTMLElement | null;
+  if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
 
 // 用相邻章节的 tick 当边界，把事件切到每章
 const chapterRanges = computed(() => {
@@ -437,6 +456,7 @@ const selectedManuChapter = computed(() => manuscript.value[selectedManuIndex.va
               <button class="btn btn-ghost text-xs mt-2 px-0 underline" @click="openCreate">添加第一个</button>
             </div>
             <button v-for="(r, i) in chapterRanges" :key="r.id"
+                    :data-chapter-row="r.id"
                     class="w-full text-left px-4 py-2.5 flex items-baseline gap-2 hover:bg-surface transition-colors"
                     :class="{ 'bg-surface': r.id === selectedId }"
                     @click="selectedId = r.id">
