@@ -1,11 +1,12 @@
 """手稿（V1 + V2）相关 API。
 
-包含 5 个端点：
-- POST /worlds/from_manuscript        V1：上传手稿建世界
-- GET  /worlds/{id}/manuscript/state  返回章节列表 + draft 事件
+包含 6 个端点：
+- POST /worlds/from_manuscript             V1：上传手稿建世界（同步，小文本用）
+- POST /worlds/from_manuscript_async       V1：上传手稿建世界（异步 job，长篇用）
+- GET  /worlds/{id}/manuscript/state       返回章节列表 + draft 事件
 - POST /worlds/{id}/manuscript/extract_events_async  V2：异步抽事件 + 因果
 - POST /worlds/{id}/manuscript/commit_events         审阅后落库
-- DEL  /worlds/{id}/manuscript/draft  丢弃草稿
+- DEL  /worlds/{id}/manuscript/draft       丢弃草稿
 """
 from __future__ import annotations
 import logging
@@ -110,6 +111,126 @@ def create_world_from_manuscript(payload: ManuscriptIngest, db: Session = Depend
             "factions": len(result.factions),
         },
         "warnings": result.warnings,
+    }
+
+
+# ─── V1：异步从手稿建世界 ──────────────────────────────────────
+
+@router.post("/worlds/from_manuscript_async")
+def create_world_from_manuscript_async(payload: ManuscriptIngest, db: Session = Depends(get_db)):
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    text = payload.text or ""
+    if len(text) < 50:
+        raise HTTPException(400, "manuscript text too short (min 50 chars)")
+
+    job = create_job("", "manuscript_ingest")
+    job.status = "running"
+    job.progress_message = "正在切分章节…"
+
+    def runner():
+        local_db = SessionLocal()
+        try:
+            from ..engine.manuscript_ingest import ingest_manuscript, render_outline_text
+
+            def progress(msg: str, done: int, total: int):
+                job.progress_message = f"{msg}（{done}/{total}）"
+
+            result = ingest_manuscript(
+                world_name=name, text=text,
+                on_progress=progress,
+            )
+
+            if job.is_cancelled():
+                job.status = "cancelled"
+                job.progress_message = "已取消"
+                return
+
+            if not result.chunks:
+                job.status = "failed"
+                job.progress_message = "; ".join(result.warnings) or "无法解析手稿"
+                return
+
+            world = World(
+                id=_new_id("w"),
+                name=name,
+                description=(payload.description or "") or result.setting,
+                outline=render_outline_text(result.outline),
+                rules={},
+                current_tick=0,
+                manuscript_chunks=[{"title": c.title, "text": c.text} for c in result.chunks],
+                manuscript_draft_events=[],
+            )
+            local_db.add(world)
+            local_db.flush()
+            main = Branch(
+                id=_new_id("br"), world_id=world.id, name="main",
+                description="主世界线（从手稿导入）", parent_branch_id=None, diverged_at_tick=0,
+            )
+            local_db.add(main)
+            local_db.flush()
+            world.active_branch_id = main.id
+
+            job.progress_message = "正在写入角色…"
+            cast_count = 0
+            for c in result.cast:
+                aliases = [a for a in (c.get("aliases") or []) if a and a != c["name"]]
+                local_db.add(Entity(
+                    id=_new_id("ent"), branch_id=main.id, type="character",
+                    name=c["name"], summary=c.get("summary", ""),
+                    attributes={"aliases": aliases} if aliases else {},
+                    state={},
+                    tags=c.get("tags") or [],
+                    pinned=1 if cast_count < 5 else 0,
+                    persona={}, memories=[],
+                    created_at_tick=0, alive=1,
+                ))
+                cast_count += 1
+
+            for loc in result.locations:
+                local_db.add(Entity(
+                    id=_new_id("ent"), branch_id=main.id, type="location",
+                    name=loc["name"], summary=loc.get("summary", ""),
+                    attributes={}, state={}, tags=[], persona={}, memories=[],
+                    created_at_tick=0, alive=1,
+                ))
+            for fac in result.factions:
+                local_db.add(Entity(
+                    id=_new_id("ent"), branch_id=main.id, type="faction",
+                    name=fac["name"], summary=fac.get("summary", ""),
+                    attributes={}, state={}, tags=[], persona={}, memories=[],
+                    created_at_tick=0, alive=1,
+                ))
+
+            local_db.commit()
+
+            job.status = "completed"
+            job.progress_message = "世界构建完成"
+            job.result = {
+                "world_id": world.id,
+                "active_branch_id": main.id,
+                "stats": {
+                    "chunks": len(result.chunks),
+                    "outline": len(result.outline),
+                    "cast": len(result.cast),
+                    "locations": len(result.locations),
+                    "factions": len(result.factions),
+                },
+                "warnings": result.warnings,
+            }
+        except Exception as e:
+            log.exception("V1 async ingest failed")
+            job.status = "failed"
+            job.progress_message = str(e)[:500]
+        finally:
+            local_db.close()
+
+    threading.Thread(target=runner, daemon=True).start()
+
+    return {
+        "job_id": job.id,
+        "message": "V1 手稿导入已启动，请轮询 /jobs/{job_id} 查看进度",
     }
 
 

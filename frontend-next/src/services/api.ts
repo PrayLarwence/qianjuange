@@ -120,6 +120,8 @@ export const worldsApi = {
       stats: { chunks: number; outline: number; cast: number; locations: number; factions: number };
       warnings: string[];
     }>('/api/worlds/from_manuscript', body),
+  fromManuscriptAsync: (body: { name: string; text: string; description?: string }) =>
+    api.post<{ job_id: string; message: string }>('/api/worlds/from_manuscript_async', body),
   manuscriptState: (id: string) =>
     api.get<ManuscriptState>(`/api/worlds/${id}/manuscript/state`),
   extractManuscriptEvents: (id: string, chapterIndices?: number[]) =>

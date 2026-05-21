@@ -119,7 +119,7 @@ cd frontend-next && npm run dev                     # 前端
 
 ## 下一批待办
 1. **端到端真实小说测试**（最大空缺）：找一本 100k+ 字中文小说，跑完整 V1→V2→审阅→续写→导出，记录阻断性 bug
-2. **V1 转异步 job**：长小说（>180k 字）当前同步 endpoint 可能超时
+2. ~~V1 转异步 job~~  ✅ 已完成：`POST /worlds/from_manuscript_async` + job 轮询，长小说不超时
 3. **metrics / 可观测性**：LLM 调用计数、token 消耗、latency 追踪（当前完全没有）
 4. **engine 子目录归拢**：31 个文件仍然扁平，按 agents / manuscript / consistency / core / worldgen 分组
 5. **导出 docx / epub**
