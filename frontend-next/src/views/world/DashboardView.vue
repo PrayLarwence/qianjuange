@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { worldsApi, llmApi, type WorldDetail } from '@/services/api';
+import {
+  worldsApi, llmApi, chaptersApi,
+  type WorldDetail, type ChapterFeedbackList,
+} from '@/services/api';
 import { agentPipelineApi, type PipelineMetrics } from '@/services/agentApi';
 import { useToastStore } from '@/stores/toast';
 
@@ -15,6 +18,7 @@ const snapshot = ref<any>(null);
 const metrics = ref<any>(null);
 const pipelineMetrics = ref<PipelineMetrics | null>(null);
 const manuscript = ref<any>(null);
+const feedback = ref<ChapterFeedbackList | null>(null);
 const loading = ref(true);
 const err = ref('');
 
@@ -22,17 +26,19 @@ async function load() {
   loading.value = true;
   err.value = '';
   try {
-    const [snap, m, met, pm] = await Promise.all([
+    const [snap, m, met, pm, fb] = await Promise.all([
       worldsApi.get(worldId.value),
       worldsApi.manuscriptState(worldId.value).catch(() => null),
       llmApi.metrics({ hours: 24 }).catch(() => null),
       agentPipelineApi.metrics(worldId.value, 168).catch(() => null),
+      chaptersApi.listFeedback(worldId.value).catch(() => null),
     ]);
     snapshot.value = snap;
     world.value = snap.world;
     manuscript.value = m;
     metrics.value = met;
     pipelineMetrics.value = pm;
+    feedback.value = fb;
   } catch (e: any) {
     err.value = e.message || String(e);
   } finally {
@@ -85,6 +91,55 @@ const workflowStep = computed(() => {
 function fmt(n: number | undefined): string {
   if (n === undefined || n === null) return '—';
   return n.toLocaleString();
+}
+
+const feedbackSummary = computed(() => feedback.value?.summary ?? null);
+
+const feedbackBars = computed(() => {
+  const s = feedbackSummary.value;
+  if (!s) return [];
+  const total = s.total_chapters || 0;
+  const pct = (n: number) => total > 0 ? Math.round((n / total) * 100) : 0;
+  return [
+    { key: 'good',    label: '好',   count: s.good,    pct: pct(s.good),    color: 'bg-emerald-500' },
+    { key: 'neutral', label: '一般', count: s.neutral, pct: pct(s.neutral), color: 'bg-muted' },
+    { key: 'bad',     label: '差',   count: s.bad,     pct: pct(s.bad),     color: 'bg-rose-500' },
+    { key: 'unrated', label: '未评', count: total - s.rated, pct: pct(total - s.rated), color: 'bg-border' },
+  ];
+});
+
+const ratedRatio = computed(() => {
+  const s = feedbackSummary.value;
+  if (!s || s.total_chapters === 0) return 0;
+  return Math.round((s.rated / s.total_chapters) * 100);
+});
+
+const badChapters = computed(() => {
+  const items = feedback.value?.items || [];
+  return items
+    .filter(it => it.feedback?.score === -1)
+    .sort((a, b) => b.tick - a.tick)  // 最近的在前
+    .slice(0, 8);
+});
+
+const recentRatedChapters = computed(() => {
+  const items = feedback.value?.items || [];
+  return items
+    .filter(it => it.feedback != null)
+    .sort((a, b) => {
+      const ta = a.feedback?.updated_at || '';
+      const tb = b.feedback?.updated_at || '';
+      return tb.localeCompare(ta);
+    })
+    .slice(0, 6);
+});
+
+function goChapter(chapterId: string) {
+  router.push({ name: 'world.chapters', params: { id: worldId.value }, query: { c: chapterId } });
+}
+
+function scoreLabel(score: number): string {
+  return score === 1 ? '好' : score === -1 ? '差' : '一般';
 }
 
 function goSettings(section: string) {
@@ -335,6 +390,80 @@ function goSettings(section: string) {
             </div>
           </div>
           <div v-else class="text-xs text-muted">暂无地点</div>
+        </div>
+      </div>
+
+      <!-- 章节评分分布 (路线 #8 收集面板) -->
+      <h2 class="text-sm uppercase tracking-wider text-muted mb-3">章节评分</h2>
+      <div class="stat-card mb-8">
+        <template v-if="feedbackSummary && feedbackSummary.total_chapters > 0">
+          <div class="flex items-baseline gap-4 mb-3 flex-wrap">
+            <div class="text-sm">
+              已评 <strong class="text-text">{{ feedbackSummary.rated }}</strong>
+              <span class="text-muted"> / {{ feedbackSummary.total_chapters }} 章 ({{ ratedRatio }}%)</span>
+            </div>
+            <div class="text-xs text-muted">
+              数据攒够后将作为 critic 调优种子集（路线 #8）
+            </div>
+          </div>
+
+          <!-- 横向堆叠条 -->
+          <div class="flex h-2.5 rounded overflow-hidden bg-border/40 mb-2"
+               :title="feedbackBars.map(b => `${b.label} ${b.count}`).join(' · ')">
+            <div v-for="b in feedbackBars" :key="b.key"
+                 :class="b.color"
+                 :style="{ width: b.pct + '%' }"></div>
+          </div>
+          <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+            <span v-for="b in feedbackBars" :key="b.key" class="flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full inline-block" :class="b.color"></span>
+              <span class="text-muted">{{ b.label }}</span>
+              <strong class="text-text">{{ b.count }}</strong>
+            </span>
+          </div>
+
+          <div v-if="badChapters.length > 0" class="mt-4 pt-3 border-t border-border/30">
+            <div class="text-xs text-muted mb-2">
+              近期差评章节（{{ badChapters.length }}）— 后续 critic 调优会优先看这些
+            </div>
+            <div class="space-y-1">
+              <button v-for="it in badChapters" :key="it.chapter_id"
+                      class="w-full text-left text-sm flex items-baseline gap-3 py-1 px-2 -mx-2 rounded hover:bg-bg/60 transition-colors"
+                      @click="goChapter(it.chapter_id)">
+                <span class="font-mono text-xs text-muted w-14 shrink-0">tick {{ it.tick }}</span>
+                <span class="truncate flex-1">{{ it.title || '（未命名章节）' }}</span>
+                <span v-if="it.feedback?.comment"
+                      class="text-xs text-muted truncate max-w-[40%] italic"
+                      :title="it.feedback.comment">
+                  「{{ it.feedback.comment }}」
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div v-else-if="feedbackSummary.rated > 0 && recentRatedChapters.length"
+               class="mt-4 pt-3 border-t border-border/30">
+            <div class="text-xs text-muted mb-2">最近评分</div>
+            <div class="space-y-1">
+              <button v-for="it in recentRatedChapters" :key="it.chapter_id"
+                      class="w-full text-left text-sm flex items-baseline gap-3 py-1 px-2 -mx-2 rounded hover:bg-bg/60 transition-colors"
+                      @click="goChapter(it.chapter_id)">
+                <span class="font-mono text-xs text-muted w-14 shrink-0">tick {{ it.tick }}</span>
+                <span class="truncate flex-1">{{ it.title || '（未命名章节）' }}</span>
+                <span class="text-xs shrink-0"
+                      :class="{
+                        'text-emerald-600': it.feedback!.score === 1,
+                        'text-muted': it.feedback!.score === 0,
+                        'text-rose-600': it.feedback!.score === -1,
+                      }">
+                  {{ scoreLabel(it.feedback!.score) }}
+                </span>
+              </button>
+            </div>
+          </div>
+        </template>
+        <div v-else class="text-xs text-muted">
+          暂无章节标记 — 推演几章并打分后这里会有分布图。
         </div>
       </div>
 

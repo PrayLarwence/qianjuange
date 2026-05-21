@@ -70,7 +70,12 @@ async function load() {
     world.value = snap.world;
     chapters.value = chs;
     events.value = tl.events;
-    if (!selectedId.value && chs.length > 0) selectedId.value = chs[0].id;
+    const queryC = (route.query.c as string | undefined) || '';
+    if (queryC && chs.some(c => c.id === queryC)) {
+      selectedId.value = queryC;
+    } else if (!selectedId.value && chs.length > 0) {
+      selectedId.value = chs[0].id;
+    }
     const map: Record<string, ChapterFeedback | null> = {};
     if (fb) for (const it of fb.items) map[it.chapter_id] = it.feedback;
     feedbackByChapter.value = map;
