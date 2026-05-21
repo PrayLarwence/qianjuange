@@ -124,11 +124,19 @@ export const worldsApi = {
     api.post<{ job_id: string; message: string }>('/api/worlds/from_manuscript_async', body),
   manuscriptState: (id: string) =>
     api.get<ManuscriptState>(`/api/worlds/${id}/manuscript/state`),
-  extractManuscriptEvents: (id: string, chapterIndices?: number[]) =>
-    api.post<{ job_id: string }>(
+  extractManuscriptEvents: (
+    id: string,
+    chapterIndices?: number[],
+    factCheck = false,
+  ) => {
+    const body: any = {};
+    if (chapterIndices && chapterIndices.length) body.chapter_indices = chapterIndices;
+    if (factCheck) body.fact_check = true;
+    return api.post<{ job_id: string }>(
       `/api/worlds/${id}/manuscript/extract_events_async`,
-      chapterIndices && chapterIndices.length ? { chapter_indices: chapterIndices } : {},
-    ),
+      body,
+    );
+  },
   commitManuscriptEvents: (id: string, events: ManuscriptDraftEvent[], clearDraft = true) =>
     api.post<{ ok: boolean; written: number; causal_links_written?: number; current_tick: number }>(
       `/api/worlds/${id}/manuscript/commit_events`,
@@ -162,6 +170,8 @@ export interface ManuscriptDraftEvent {
   tick: number;
   causes?: number[];
   source_context?: string;
+  needs_review?: boolean;
+  review_reason?: string;
 }
 
 export interface ManuscriptState {

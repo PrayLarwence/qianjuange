@@ -41,6 +41,8 @@ class DraftEvent:
     tick: int                       # 由调用方分配
     causes: list[int] = field(default_factory=list)  # 上游事件的 tick 列表
     source_context: str = ""  # 原文段落片段（审阅时对照用）
+    needs_review: bool = False  # fact-check 判失败 → 提示用户人工复核
+    review_reason: str = ""  # fact-check 给的理由（false 时填）
 
     def to_dict(self) -> dict:
         return {
@@ -56,6 +58,8 @@ class DraftEvent:
             "tick":              self.tick,
             "causes":            list(self.causes),
             "source_context":    self.source_context,
+            "needs_review":      self.needs_review,
+            "review_reason":     self.review_reason,
         }
 
 
@@ -126,6 +130,7 @@ def extract_events(
     cancel_check: Callable[[], bool] | None = None,
     chapter_indices: list[int] | None = None,
     on_batch_complete: Callable[[list[DraftEvent]], None] | None = None,
+    fact_check: bool = False,
 ) -> ExtractResult:
     """chunks: [{title, text}] 顺序对应章节 1..N。
 
@@ -280,7 +285,156 @@ def extract_events(
 
     if on_progress:
         on_progress(f"完成，共 {len(result.events)} 个事件", len(batches), len(batches))
+
+    if fact_check and result.events:
+        try:
+            fc_warnings = fact_check_events(
+                events=result.events, chunks=chunks, llm=llm,
+                on_progress=on_progress, cancel_check=cancel_check,
+            )
+            result.warnings.extend(fc_warnings)
+            # 重新触发增量持久化（needs_review 状态需要写出去，调用方那次 on_batch_complete 时还没标）
+            if on_batch_complete:
+                try:
+                    on_batch_complete(list(result.events))
+                except Exception:
+                    log.exception("on_batch_complete after fact_check failed")
+        except Exception as e:
+            log.exception("fact_check failed")
+            result.warnings.append(f"fact-check 整体失败: {e}")
     return result
+
+
+# ===== fact-check =====
+
+FACT_CHECK_SYSTEM_PROMPT = """你是事实核查员。我会给你一段小说原文 + 抽取出来的若干事件，你判断每个事件是否真的在原文里发生了。
+
+输出严格为 JSON 对象，不要任何解释、不要 markdown 代码块包裹：
+
+{
+  "verdicts": [
+    {"tick": 5, "verified": true, "reason": ""},
+    {"tick": 6, "verified": false, "reason": "原文没出现这个动作"}
+  ]
+}
+
+规则：
+- 每个事件都要给一个 verdict, tick 用我给你的事件 tick 编号, 一一对应
+- verified=true: 事件确实在原文里发生(参与者/地点也对得上); false: 原文里没说 / 说的不一样
+- false 时必须给出 reason 解释问题(15 字以内); true 时 reason 留空字符串
+- 严格保守: 模棱两可的也算 false, 让用户去复核"""
+
+
+def _build_fact_check_prompt(chapter_idx: int, chapter_title: str, chapter_text: str,
+                             events: list[DraftEvent]) -> str:
+    parts: list[str] = [f"# 第 {chapter_idx} 章原文：{chapter_title}\n\n{chapter_text}\n"]
+    parts.append("\n# 待核查事件\n")
+    for ev in events:
+        parts.append(
+            f"\n## tick={ev.tick}\n"
+            f"标题: {ev.title}\n"
+            f"描述: {ev.description}\n"
+            f"参与者: {', '.join(ev.participant_names) or '(无)'}\n"
+            f"地点: {ev.location_name or '(无)'}"
+        )
+    return "\n".join(parts)
+
+
+def fact_check_events(
+    *,
+    events: list[DraftEvent],
+    chunks: list[dict],
+    llm: Optional[LLMProvider] = None,
+    on_progress: Callable[[str, int, int], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> list[str]:
+    """对已抽事件做事实核查。
+
+    逐章把事件批量送 LLM, 对照原文判断是否成立; 不成立的标 ev.needs_review=True
+    并填 review_reason. Mutates events in place. 返回 warnings.
+    """
+    warnings: list[str] = []
+    if not events:
+        return warnings
+    if llm is None:
+        try:
+            llm = get_provider()
+        except Exception as e:
+            warnings.append(f"fact-check: 未配置 LLM ({e})")
+            return warnings
+
+    chapter_text_lookup: dict[int, str] = {}
+    chapter_title_lookup: dict[int, str] = {}
+    for i, c in enumerate(chunks):
+        chapter_text_lookup[i + 1] = str(c.get("text") or "")
+        chapter_title_lookup[i + 1] = str(c.get("title") or "")
+
+    by_ch: dict[int, list[DraftEvent]] = {}
+    for ev in events:
+        by_ch.setdefault(ev.chapter_index, []).append(ev)
+    chapters = sorted(by_ch.keys())
+
+    for bi, ch in enumerate(chapters):
+        if cancel_check and cancel_check():
+            warnings.append("fact-check 已取消")
+            break
+        if on_progress:
+            on_progress(f"复核第 {ch} 章", bi, len(chapters))
+
+        text = chapter_text_lookup.get(ch, "")
+        if not text:
+            warnings.append(f"第 {ch} 章: 找不到原文，跳过 fact-check")
+            continue
+        ch_title = chapter_title_lookup.get(ch, "")
+        chapter_evs = by_ch[ch]
+        prompt = _build_fact_check_prompt(ch, ch_title, text, chapter_evs)
+        try:
+            resp = llm.chat(
+                system=FACT_CHECK_SYSTEM_PROMPT,
+                messages=[Message(role="user", content=prompt)],
+                tools=[],
+                max_tokens=2000,
+                temperature=0.2,
+                timeout=120.0,
+            )
+        except Exception as e:
+            log.exception("fact-check chapter %d failed", ch)
+            warnings.append(f"第 {ch} 章 fact-check LLM 失败: {e}")
+            continue
+        parsed = _parse_json_object(resp.text or "")
+        if not parsed:
+            warnings.append(f"第 {ch} 章 fact-check 输出非法 JSON")
+            continue
+        verdicts = parsed.get("verdicts") or []
+        if not isinstance(verdicts, list):
+            warnings.append(f"第 {ch} 章 fact-check verdicts 不是数组")
+            continue
+        verdict_by_tick: dict[int, dict] = {}
+        for v in verdicts:
+            if not isinstance(v, dict):
+                continue
+            try:
+                t = int(v.get("tick"))
+            except Exception:
+                continue
+            verdict_by_tick[t] = v
+
+        for ev in chapter_evs:
+            v = verdict_by_tick.get(ev.tick)
+            if v is None:
+                ev.needs_review = True
+                ev.review_reason = "fact-check 未给出该事件结论"
+                continue
+            verified = bool(v.get("verified"))
+            ev.needs_review = not verified
+            if verified:
+                ev.review_reason = ""
+            else:
+                ev.review_reason = (str(v.get("reason") or "")[:300]) or "fact-check: 与原文不符"
+
+    if on_progress:
+        on_progress("fact-check 完成", len(chapters), len(chapters))
+    return warnings
 
 
 def _norm(name: str) -> str:

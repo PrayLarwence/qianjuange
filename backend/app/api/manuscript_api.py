@@ -294,6 +294,7 @@ def get_manuscript_state(world_id: str, db: Session = Depends(get_db)):
 
 class ManuscriptExtractRequest(BaseModel):
     chapter_indices: list[int] | None = None
+    fact_check: bool = False  # V2: extract 后逐章对照原文核查; 失败的事件 needs_review=True
 
 
 @router.post("/worlds/{world_id}/manuscript/extract_events_async")
@@ -367,6 +368,7 @@ def extract_manuscript_events_async(
                 cancel_check=job.is_cancelled,
                 chapter_indices=selected_indices,
                 on_batch_complete=on_batch,
+                fact_check=bool(payload and payload.fact_check),
             )
 
             if accumulated and not job.is_cancelled():
@@ -382,6 +384,8 @@ def extract_manuscript_events_async(
                         location_name=str(d.get("location_name") or ""),
                         location_id=d.get("location_id"),
                         tick=int(d.get("tick") or 0),
+                        needs_review=bool(d.get("needs_review") or False),
+                        review_reason=str(d.get("review_reason") or ""),
                     )
                     for d in accumulated
                 ]

@@ -24,6 +24,7 @@ const extractStatus = ref<string>('');
 const extractRunning = ref(false);
 const extractError = ref<string>('');
 const extractRangeText = ref<string>('');
+const extractFactCheck = ref<boolean>(false);
 let pollTimer: number | null = null;
 
 const reviewOpen = ref(false);
@@ -47,9 +48,14 @@ const castNameById = computed(() => {
   return m;
 });
 const acceptedCount = computed(() => reviewDraft.value.filter(e => e._accept).length);
+const needsReviewCount = computed(() => reviewDraft.value.filter(e => e.needs_review).length);
+const onlyNeedsReview = ref(false);
 const eventsByChapter = computed(() => {
   const groups = new Map<number, DraftRow[]>();
-  for (const ev of reviewDraft.value) {
+  const filtered = onlyNeedsReview.value
+    ? reviewDraft.value.filter(e => e.needs_review)
+    : reviewDraft.value;
+  for (const ev of filtered) {
     const arr = groups.get(ev.chapter_index) || [];
     arr.push(ev);
     groups.set(ev.chapter_index, arr);
@@ -127,7 +133,9 @@ async function startExtract() {
   extractStatus.value = '排队中…';
   extractRunning.value = true;
   try {
-    const r = await worldsApi.extractManuscriptEvents(props.worldId, chapterIndices);
+    const r = await worldsApi.extractManuscriptEvents(
+      props.worldId, chapterIndices, extractFactCheck.value,
+    );
     extractJobId.value = r.job_id;
     pollTimer = window.setInterval(pollExtractJob, 1500);
   } catch (e: any) {
@@ -278,6 +286,11 @@ onUnmounted(stopPolling);
                type="text"
                class="input !h-8 text-xs font-mono w-44"
                :placeholder="`章节范围（默认全部 1-${manuscript.chapter_count}）`" />
+        <label class="flex items-center gap-1 text-xs cursor-pointer select-none"
+               title="抽完后再让 LLM 对照原文复核每个事件，可疑的标 needs_review 给你审阅时一眼看到。耗时翻倍">
+          <input type="checkbox" v-model="extractFactCheck" />
+          <span>fact-check</span>
+        </label>
         <button class="btn btn-accent" @click="startExtract">
           {{ extractRangeText.trim() ? '抽这些章' : (manuscript.draft_event_count > 0 ? '重抽全部' : '抽取事件') }}
         </button>
@@ -311,10 +324,17 @@ onUnmounted(stopPolling);
         <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
           <span class="text-muted">共 <strong class="text-text">{{ reviewDraft.length }}</strong> 个事件</span>
           <span class="text-muted">已勾选 <strong class="text-text">{{ acceptedCount }}</strong> 个</span>
+          <span v-if="needsReviewCount > 0" class="text-amber-600">
+            ⚠ <strong>{{ needsReviewCount }}</strong> 个事件 fact-check 失败
+          </span>
           <button class="btn btn-ghost text-xs"
                   @click="reviewDraft.forEach(e => e._accept = true)">全选</button>
           <button class="btn btn-ghost text-xs"
                   @click="reviewDraft.forEach(e => e._accept = false)">全不选</button>
+          <label v-if="needsReviewCount > 0" class="flex items-center gap-1 text-xs cursor-pointer select-none">
+            <input type="checkbox" v-model="onlyNeedsReview" />
+            <span>仅看 fact-check 失败的</span>
+          </label>
           <span class="text-xs text-muted">名字解析失败的角色会用红字标出，落库时会被忽略，可以先去角色页补全再来抽。</span>
         </div>
 
@@ -326,10 +346,17 @@ onUnmounted(stopPolling);
             <ul class="space-y-2">
               <li v-for="ev in evs" :key="`${ev.chapter_index}-${ev.tick}`"
                   class="surface rounded p-3 flex gap-3"
-                  :class="{ 'opacity-50': !ev._accept }">
+                  :class="{
+                    'opacity-50': !ev._accept,
+                    'border-l-4 border-amber-500': ev.needs_review,
+                  }">
                 <input type="checkbox" v-model="ev._accept"
                        class="mt-1.5 w-4 h-4 cursor-pointer shrink-0" />
                 <div class="flex-1 min-w-0 space-y-1.5">
+                  <div v-if="ev.needs_review" class="text-xs text-amber-600 flex items-start gap-1">
+                    <span class="font-bold">⚠ fact-check：</span>
+                    <span>{{ ev.review_reason || '与原文对不上，请人工复核' }}</span>
+                  </div>
                   <input v-model="ev.title" :disabled="!ev._accept"
                          class="input !h-8 text-sm font-serif" placeholder="事件标题" />
                   <textarea v-model="ev.description" :disabled="!ev._accept" rows="2"
