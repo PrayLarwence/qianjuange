@@ -3,7 +3,7 @@ from .world import (
     World, Branch, Entity, Event, CausalLink, Snapshot, NarrativeLog,
     ChapterMarker, WorldTemplate, ConsistencyIssue, ScanRun, PlotThread,
     StyleProfile, EntitySnapshot, EmbeddingChunk, ChapterSummary, WorldLore,
-    IssuePatch, AgentTrace, LlmCallMetric,
+    IssuePatch, AgentTrace, LlmCallMetric, ManuscriptChunk,
 )
 
 __all__ = [

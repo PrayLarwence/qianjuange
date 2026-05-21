@@ -27,12 +27,24 @@ class World(Base):
     author_model_override = Column(String, default="")
     editor_model_override = Column(String, default="")
     reader_model_override = Column(String, default="")
-    manuscript_chunks = Column(JSON, default=list)
+    manuscript_chunks = Column(JSON, default=list)  # 已废弃，数据迁移到 manuscript_chunks 表
     manuscript_draft_events = Column(JSON, default=list)
     agent_pipeline = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     branches = relationship("Branch", back_populates="world", foreign_keys="Branch.world_id")
+
+
+class ManuscriptChunk(Base):
+    """手稿章节独立表（从 World.manuscript_chunks JSON 迁出）。"""
+    __tablename__ = "manuscript_chunks"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    world_id = Column(String, ForeignKey("worlds.id"), nullable=False, index=True)
+    chapter_index = Column(Integer, nullable=False)  # 1-based
+    title = Column(String, default="")
+    text = Column(Text, default="")
+
+    world = relationship("World", foreign_keys=[world_id])
 
 
 class Branch(Base):

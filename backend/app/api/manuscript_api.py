@@ -16,13 +16,44 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..models import (
-    get_db, SessionLocal, World, Branch, Entity, Event, CausalLink,
+    get_db, SessionLocal, World, Branch, Entity, Event, CausalLink, ManuscriptChunk,
 )
 from ..engine import create_job
 from ._common import _new_id
 
 log = logging.getLogger(__name__)
 router = APIRouter()
+
+
+# ─── chunk 表读写 helper ─────────────────────────────────────
+
+def _load_chunks(db: Session, world_id: str) -> list[dict]:
+    rows = (
+        db.query(ManuscriptChunk)
+        .filter_by(world_id=world_id)
+        .order_by(ManuscriptChunk.chapter_index)
+        .all()
+    )
+    if rows:
+        return [{"title": r.title, "text": r.text} for r in rows]
+    # fallback: 从旧 JSON 字段迁移
+    world = db.query(World).filter_by(id=world_id).first()
+    legacy = (world.manuscript_chunks or []) if world else []
+    if legacy:
+        _save_chunks(db, world_id, legacy)
+    return legacy
+
+
+def _save_chunks(db: Session, world_id: str, chunks: list[dict]):
+    db.query(ManuscriptChunk).filter_by(world_id=world_id).delete()
+    for i, c in enumerate(chunks):
+        db.add(ManuscriptChunk(
+            world_id=world_id,
+            chapter_index=i + 1,
+            title=str(c.get("title") or "")[:500],
+            text=str(c.get("text") or ""),
+        ))
+    db.flush()
 
 
 # ─── V1：从手稿建世界 ────────────────────────────────────────────
@@ -55,11 +86,12 @@ def create_world_from_manuscript(payload: ManuscriptIngest, db: Session = Depend
         outline=render_outline_text(result.outline),
         rules={},
         current_tick=0,
-        manuscript_chunks=[{"title": c.title, "text": c.text} for c in result.chunks],
         manuscript_draft_events=[],
     )
     db.add(world)
     db.flush()
+    _save_chunks(db, world.id, [{"title": c.title, "text": c.text} for c in result.chunks])
+
     main = Branch(
         id=_new_id("br"), world_id=world.id, name="main",
         description="主世界线（从手稿导入）", parent_branch_id=None, diverged_at_tick=0,
@@ -159,11 +191,11 @@ def create_world_from_manuscript_async(payload: ManuscriptIngest, db: Session = 
                 outline=render_outline_text(result.outline),
                 rules={},
                 current_tick=0,
-                manuscript_chunks=[{"title": c.title, "text": c.text} for c in result.chunks],
                 manuscript_draft_events=[],
             )
             local_db.add(world)
             local_db.flush()
+            _save_chunks(local_db, world.id, [{"title": c.title, "text": c.text} for c in result.chunks])
             main = Branch(
                 id=_new_id("br"), world_id=world.id, name="main",
                 description="主世界线（从手稿导入）", parent_branch_id=None, diverged_at_tick=0,
@@ -241,7 +273,7 @@ def get_manuscript_state(world_id: str, db: Session = Depends(get_db)):
     world = db.query(World).filter_by(id=world_id).first()
     if not world:
         raise HTTPException(404, "world not found")
-    chunks = world.manuscript_chunks or []
+    chunks = _load_chunks(db, world_id)
     draft = world.manuscript_draft_events or []
     chapter_summaries = [
         {"index": i + 1, "title": str(c.get("title") or "")[:120], "char_count": len(str(c.get("text") or ""))}
@@ -271,7 +303,7 @@ def extract_manuscript_events_async(
     world = db.query(World).filter_by(id=world_id).first()
     if not world:
         raise HTTPException(404, "world not found")
-    chunks = world.manuscript_chunks or []
+    chunks = _load_chunks(db, world_id)
     if not chunks:
         raise HTTPException(400, "该世界没有手稿数据，无法抽取事件")
 

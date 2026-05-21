@@ -145,6 +145,37 @@ def _migrate() -> None:
                 conn.exec_driver_sql("ALTER TABLE issue_patches ADD COLUMN original_snapshot TEXT DEFAULT ''")
         except Exception:
             pass
+        # manuscript_chunks JSON → 独立表
+        try:
+            existing = conn.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='manuscript_chunks'"
+            ).fetchone()
+            if not existing:
+                conn.exec_driver_sql("""
+                    CREATE TABLE manuscript_chunks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        world_id VARCHAR NOT NULL,
+                        chapter_index INTEGER NOT NULL,
+                        title VARCHAR DEFAULT '',
+                        text TEXT DEFAULT ''
+                    )
+                """)
+                conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_manuscript_chunks_world ON manuscript_chunks (world_id)")
+                # 从旧 JSON 迁移
+                rows = conn.exec_driver_sql("SELECT id, manuscript_chunks FROM worlds WHERE manuscript_chunks IS NOT NULL AND manuscript_chunks != '[]'").fetchall()
+                import json
+                for world_id, raw in rows:
+                    try:
+                        chunks = json.loads(raw) if isinstance(raw, str) else (raw or [])
+                        for i, c in enumerate(chunks):
+                            conn.exec_driver_sql(
+                                "INSERT INTO manuscript_chunks (world_id, chapter_index, title, text) VALUES (?, ?, ?, ?)",
+                                (world_id, i + 1, str(c.get("title") or "")[:500], str(c.get("text") or ""))
+                            )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
 
 def get_db():
