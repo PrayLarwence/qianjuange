@@ -248,6 +248,15 @@ const severityOptions: { value: CriticAgent['severity']; label: string; hint: st
                  v-model.number="cfg.max_critic_retries" @input="markDirty" class="input w-full" />
         </div>
         <div>
+          <label class="text-xs text-muted">
+            Best-of-K author（K&gt;1 时并行生成 K 候选，按 critic 总分挑最优）
+          </label>
+          <input type="number" min="1" :max="limits.max_author_best_of || 4"
+                 v-model.number="cfg.author_best_of" @input="markDirty" class="input w-full"
+                 :disabled="cfg.critics.length === 0"
+                 :title="cfg.critics.length === 0 ? '需至少 1 个 critic 才能给候选评分' : ''" />
+        </div>
+        <div>
           <label class="text-xs text-muted">每次推演最多 LLM 调用</label>
           <input type="number" min="1" :max="limits.max_llm_calls"
                  v-model.number="cfg.budget.max_llm_calls" @input="markDirty" class="input w-full" />

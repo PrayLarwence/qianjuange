@@ -25,6 +25,7 @@
   ],
   "max_critic_retries": 4,
   "critic_mode": "parallel",
+  "author_best_of": 1,
   "budget": {
     "max_llm_calls": 20,
     "max_wall_seconds": 300

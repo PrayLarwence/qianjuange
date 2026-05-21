@@ -680,3 +680,214 @@ def test_arc_critic_kind_serialized_round_trip():
         critics=[CriticAgent(name="y")],
     )
     assert cfg2.critics[0].kind == "general"
+
+
+# ===== Best-of-K author 多候选 =====
+
+def _best_of_k_provider(
+    *,
+    candidate_texts: list[str],
+    critic_responses_per_candidate: list[list[str]],
+    rewrite_texts: list[str] | None = None,
+    post_rewrite_critic_responses: list[list[str]] | None = None,
+):
+    """构造 FakeProvider 序列，模拟 best-of-K 流水线：
+      director_hop1, director_hop2,
+      author_candidate_0, author_candidate_1, ..., author_candidate_K-1,
+      ranking_critics_for_cand_0[N], ranking_critics_for_cand_1[N], ...,
+      [rewrite_0, post_rewrite_critics[N], rewrite_1, ...]
+    """
+    base = [
+        LLMResponse(tool_calls=[ToolCall(id="t1", name="narrate", arguments={"text": "夜风掠过城墙。林冲提刀。"})]),
+        LLMResponse(tool_calls=[ToolCall(id="t2", name="end_turn", arguments={})]),
+    ]
+    for t in candidate_texts:
+        base.append(LLMResponse(text=t))
+    for cr_list in critic_responses_per_candidate:
+        for cr in cr_list:
+            base.append(LLMResponse(text=cr))
+    rw = list(rewrite_texts or [])
+    post = list(post_rewrite_critic_responses or [])
+    while rw or post:
+        if rw:
+            base.append(LLMResponse(text=rw.pop(0)))
+        if post:
+            for cr in post.pop(0):
+                base.append(LLMResponse(text=cr))
+
+    fail_default = '{"verdict":"fail","score":1,"reason":"queue empty","suggestions":""}'
+
+    class P:
+        name = "fake"
+        def __init__(self):
+            self.queue = list(base)
+            self.calls = 0
+        def chat(self, system, messages, tools, **kw):
+            self.calls += 1
+            if self.queue:
+                return self.queue.pop(0)
+            return LLMResponse(text=fail_default)
+
+    return P()
+
+
+def test_best_of_k_winner_all_pass_skips_loop(db, world_factory):
+    """K=2 候选 + 1 critic：cand0 fail, cand1 all-pass → 选 cand1, 不进入重试循环。"""
+    w, br = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="strict")],
+        author_best_of=2,
+        max_critic_retries=2,
+    )
+    p = _best_of_k_provider(
+        candidate_texts=[
+            "候选 0：夜风过城墙，林冲提刀。",
+            "候选 1：夜风掠过苍青城墙，林冲缓缓握紧雁翎刀。",
+        ],
+        critic_responses_per_candidate=[
+            ['{"verdict":"fail","score":3,"reason":"太散","suggestions":"凝练"}'],
+            ['{"verdict":"pass","score":9,"reason":"很好","suggestions":""}'],
+        ],
+    )
+    res = run_orchestrated_step(db, w, "测试", job_id="j_bok1", cfg=cfg, provider=p)
+    assert res["final_verdict"] == "pass"
+    assert res["critic_rounds"] == 1  # 只有 ranking 这一轮
+    # author_final 文本应是 cand1
+    af = db.query(NarrativeLog).filter_by(branch_id=br.id, role="author_final").first()
+    assert af is not None and "雁翎刀" in af.text
+    # 候选 trace
+    cand_traces = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_bok1", AgentTrace.role == "author")
+        .order_by(AgentTrace.seq).all()
+    )
+    cand_indices = [(t.extra or {}).get("candidate_index") for t in cand_traces if (t.extra or {}).get("is_best_of_candidate")]
+    assert cand_indices == [0, 1]
+    # ranking critic trace 应被打 is_ranking
+    ranking_critics = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_bok1", AgentTrace.role == "critic")
+        .all()
+    )
+    assert all((t.extra or {}).get("is_ranking") for t in ranking_critics)
+    # 编排选 trace
+    pick = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_bok1",
+                AgentTrace.role == "orchestrator",
+                AgentTrace.agent_name == "(best-of-K pick)")
+        .first()
+    )
+    assert pick is not None
+    assert (pick.extra or {}).get("winner_idx") == 1
+    assert (pick.extra or {}).get("k") == 2
+
+
+def test_best_of_k_winner_fails_then_rewrite_passes(db, world_factory):
+    """K=2 候选都 fail → 选高分者 → 立即 rewrite → critic pass → final='pass', critic_rounds=2。"""
+    w, _ = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="strict")],
+        author_best_of=2,
+        max_critic_retries=2,
+    )
+    p = _best_of_k_provider(
+        candidate_texts=["候选 0：差。", "候选 1：稍好但也差。"],
+        critic_responses_per_candidate=[
+            ['{"verdict":"fail","score":3,"reason":"差","suggestions":"重写"}'],
+            ['{"verdict":"fail","score":5,"reason":"还行但差","suggestions":"再凝练"}'],
+        ],
+        rewrite_texts=["重写后的版本。"],
+        post_rewrite_critic_responses=[
+            ['{"verdict":"pass","score":8,"reason":"OK","suggestions":""}'],
+        ],
+    )
+    res = run_orchestrated_step(db, w, "测试", job_id="j_bok2", cfg=cfg, provider=p)
+    assert res["final_verdict"] == "pass"
+    assert res["critic_rounds"] == 2  # ranking + 重写后那一轮
+    pick = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_bok2",
+                AgentTrace.role == "orchestrator",
+                AgentTrace.agent_name == "(best-of-K pick)")
+        .first()
+    )
+    # 都 fail 时按总分高者优先：cand1 score=5 > cand0 score=3
+    assert (pick.extra or {}).get("winner_idx") == 1
+
+
+def test_best_of_k_temperatures_evenly_spread():
+    from app.engine.agents.orchestrator import _best_of_k_temperatures
+    assert _best_of_k_temperatures(1) == [0.85]
+    t2 = _best_of_k_temperatures(2)
+    assert len(t2) == 2 and t2[0] < t2[1]
+    t4 = _best_of_k_temperatures(4)
+    assert len(t4) == 4 and t4 == sorted(t4)
+    # 温度合理范围
+    for t in t4:
+        assert 0.0 <= t <= 1.5
+
+
+def test_best_of_k_no_critics_falls_through_to_single_shot(db, world_factory):
+    """K>1 但没 critic：无法做评分，应回落到单次 author。"""
+    w, br = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[],  # 没有 critic
+        author_best_of=3,
+    )
+    # 标准 director_then_critics_provider 模拟单次 author
+    p = _director_then_critics_provider([])
+    res = run_orchestrated_step(db, w, "fall-through", job_id="j_bok3", cfg=cfg, provider=p)
+    assert res["final_verdict"] == "no_critics"
+    # 确认没写出任何 best_of 候选 trace
+    cand_traces = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_bok3", AgentTrace.role == "author")
+        .all()
+    )
+    assert all(not (t.extra or {}).get("is_best_of_candidate") for t in cand_traces)
+
+
+def test_best_of_k_metrics_excludes_ranking_traces(db, world_factory):
+    """query_pipeline_metrics 应该忽略 best-of-K ranking 阶段的 critic trace。"""
+    from app.engine.agents.orchestrator import query_pipeline_metrics
+    w, _ = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="strict")],
+        author_best_of=2,
+        max_critic_retries=0,
+    )
+    p = _best_of_k_provider(
+        candidate_texts=["候选 0", "候选 1"],
+        critic_responses_per_candidate=[
+            ['{"verdict":"pass","score":7,"reason":"ok","suggestions":""}'],
+            ['{"verdict":"pass","score":9,"reason":"better","suggestions":""}'],
+        ],
+    )
+    run_orchestrated_step(db, w, "测试", job_id="j_bok4", cfg=cfg, provider=p)
+    m = query_pipeline_metrics(db, w.id, hours=24)
+    # best-of-K all-pass 应被算作 first_pass=1（ranking winner_all_pass）
+    assert m["summary"]["total_jobs"] == 1
+    assert m["summary"]["first_pass"] == 1
+    assert m["summary"]["forced_accept"] == 0
+    # critic_rounds=1: 只 ranking 跑了一轮; ranking 不被当成 retry 轮
+    assert m["summary"]["avg_critic_rounds"] == 1.0
+    # by_critic.runs 把 ranking 的两次评分都算进来（每个候选评一次都是 critic 的真实输出）
+    assert m["by_critic"]["strict"]["runs"] == 2
+    assert m["by_critic"]["strict"]["pass"] == 2

@@ -40,6 +40,7 @@ export interface PipelineConfig {
   critics: CriticAgent[];
   critic_mode: CriticMode;
   max_critic_retries: number;
+  author_best_of?: number;
   budget: BudgetConfig;
 }
 
@@ -49,6 +50,7 @@ export interface PipelineLimits {
   max_critic_retries: number;
   max_llm_calls: number;
   max_wall_seconds: number;
+  max_author_best_of?: number;
 }
 
 export interface AgentTrace {

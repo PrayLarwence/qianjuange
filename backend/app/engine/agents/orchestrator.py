@@ -366,6 +366,193 @@ def _author_rewrite(
     return new_text, tr
 
 
+def _best_of_k_temperatures(k: int, base: float = 0.85) -> list[float]:
+    """K 个候选温度：K=1 走默认 [0.85]；K>=2 在 [0.55, 1.15] 上均匀分布。"""
+    if k <= 1:
+        return [base]
+    spread = 0.6  # 总跨度
+    lo = max(0.0, base - spread / 2)
+    return [round(lo + spread * i / (k - 1), 2) for i in range(k)]
+
+
+def _best_of_k_author_phase(
+    db: Session,
+    job_id: str,
+    world: World,
+    seq_in: int,
+    branch_id: str,
+    start_tick: int,
+    primary_author,
+    cfg: PipelineConfig,
+    provider: Optional[LLMProvider],
+    budget: _Budget,
+    cancel_check: Optional[Callable[[], bool]],
+    arc_context: Optional[str],
+) -> Optional[dict]:
+    """生成 K 个候选 + 用 critic 总分挑出 winner，写为 author_final。
+
+    返回 None 表示无法做 best-of-K（无 drafts / 无 style / 无 provider / K<=1），
+    调用方应该 fallthrough 到单次 author 路径。
+
+    成功返回 dict：
+      seq_after, final_text, author_log_id,
+      winner_idx, winner_critic_results: dict[name → parsed],
+      winner_all_pass: bool, winner_failed_feedback: list[dict],
+      candidate_summaries: 用于汇总 trace
+    """
+    if cfg.author_best_of <= 1 or not cfg.critics:
+        return None
+    from .author import (
+        prepare_author_inputs, call_author_llm_once,
+        write_author_final, write_author_fallback,
+    )
+    from ..core.simulator import _resolve_provider as _sim_resolve_provider
+    llm = provider or _sim_resolve_provider(world)
+    if llm is None:
+        return None
+
+    prep, early = prepare_author_inputs(db, world, branch_id, start_tick)
+    if early is not None or prep is None:
+        return None  # no draft / no style → 走单次路径
+
+    seq = seq_in
+    K = cfg.author_best_of
+    temps = _best_of_k_temperatures(K)
+    candidates: list[dict] = []  # {idx, temperature, text|None, reason}
+
+    for i, temp in enumerate(temps):
+        if cancel_check and cancel_check():
+            from ..core.simulator import CancelledError
+            raise CancelledError()
+        try:
+            budget.check()
+            budget.add_call()
+        except BudgetExhausted:
+            log.info("budget exhausted at best-of-K candidate %d", i)
+            break
+        text, reason = call_author_llm_once(llm, prep, temperature=temp)
+        candidates.append({"idx": i, "temperature": temp, "text": text, "reason": reason})
+        seq += 1
+        _write_trace(
+            db, job_id=job_id, world_id=world.id, seq=seq,
+            role="author", agent_name=primary_author.name,
+            model=primary_author.model,
+            status="done" if text else "error",
+            input_summary=f"best-of-{K} 候选 #{i} (T={temp})",
+            output_summary=_summarize(text or f"(rejected: {reason})", 200),
+            extra={
+                "candidate_index": i, "temperature": temp,
+                "is_best_of_candidate": True, "char_count": len(text or ""),
+                "reject_reason": None if text else reason,
+            },
+        )
+
+    valid = [c for c in candidates if c["text"]]
+    if not valid:
+        # 所有候选都失败：fallback 一次
+        log.warning("all %d candidates failed, falling back to draft", len(candidates))
+        ar = write_author_fallback(db, prep, reason="all candidates failed")
+        return {
+            "seq_after": seq, "final_text": ar.text, "author_log_id": ar.log_id,
+            "winner_idx": -1, "winner_critic_results": {},
+            "winner_all_pass": False, "winner_failed_feedback": [],
+            "fell_back": True,
+        }
+
+    # 给每个候选跑全套 critic（ranking phase, iteration=0 但 extra.is_ranking=True）
+    candidate_critic_results: list[dict] = []  # 每项: {idx, scores, all_pass, failed_feedback, results: dict[name→parsed]}
+    for cand in valid:
+        per: dict = {"idx": cand["idx"], "results": {}, "scores": [],
+                     "all_pass": True, "failed_feedback": []}
+        for c in cfg.critics:
+            if cancel_check and cancel_check():
+                from ..core.simulator import CancelledError
+                raise CancelledError()
+            seq += 1
+            try:
+                parsed, _ = _run_one_critic(
+                    db, job_id, world, seq, 0, c,
+                    cand["text"], None, llm, budget, cancel_check,
+                    previous_round=None,
+                    arc_context=arc_context if c.kind == "arc" else None,
+                )
+            except BudgetExhausted:
+                log.info("budget exhausted at ranking critic")
+                # 把当前候选标 incomplete，但已评的还能用
+                per["incomplete"] = True
+                break
+            # 标记为 ranking
+            tr = db.query(AgentTrace).filter_by(job_id=job_id, seq=seq).first()
+            if tr:
+                ex = dict(tr.extra or {})
+                ex["is_ranking"] = True
+                ex["candidate_index"] = cand["idx"]
+                tr.extra = ex
+                db.commit()
+            per["results"][c.name] = parsed
+            per["scores"].append(parsed.get("score", 5))
+            if parsed["verdict"] == "fail":
+                per["all_pass"] = False
+                per["failed_feedback"].append({
+                    "name": c.name,
+                    "reason": parsed["reason"],
+                    "suggestions": parsed["suggestions"],
+                })
+        per["total_score"] = sum(per["scores"]) if per["scores"] else 0
+        candidate_critic_results.append(per)
+
+    # 选 winner: 先看 all_pass 候选; 平分时 idx 小者优先
+    passing = [r for r in candidate_critic_results if r.get("all_pass") and not r.get("incomplete")]
+    pool = passing if passing else candidate_critic_results
+    pool_sorted = sorted(pool, key=lambda r: (-r.get("total_score", 0), r["idx"]))
+    winner_summary = pool_sorted[0] if pool_sorted else None
+
+    if winner_summary is None:
+        # 极端：连 critic 都没跑成 → fallback 第一个有效候选
+        winner_text = valid[0]["text"]
+        winner_idx = valid[0]["idx"]
+        winner_results: dict = {}
+        winner_all_pass = False
+        winner_feedback: list[dict] = []
+    else:
+        winner_idx = winner_summary["idx"]
+        winner_text = next(c["text"] for c in valid if c["idx"] == winner_idx)
+        winner_results = winner_summary["results"]
+        winner_all_pass = bool(winner_summary.get("all_pass"))
+        winner_feedback = list(winner_summary.get("failed_feedback") or [])
+
+    final = write_author_final(db, prep, winner_text)
+
+    seq += 1
+    _write_trace(
+        db, job_id=job_id, world_id=world.id, seq=seq,
+        role="orchestrator", agent_name="(best-of-K pick)",
+        status="done", verdict="pass" if winner_all_pass else "fail",
+        input_summary=f"K={K} 候选 / {len(valid)} 有效",
+        output_summary=f"选中 #{winner_idx} (score={winner_summary.get('total_score') if winner_summary else 'n/a'}, all_pass={winner_all_pass})",
+        extra={
+            "k": K, "winner_idx": winner_idx,
+            "winner_all_pass": winner_all_pass,
+            "summary": [
+                {"idx": r["idx"], "total_score": r.get("total_score"),
+                 "all_pass": r.get("all_pass"), "fail_count": len(r.get("failed_feedback") or [])}
+                for r in candidate_critic_results
+            ],
+        },
+    )
+
+    return {
+        "seq_after": seq,
+        "final_text": winner_text,
+        "author_log_id": final.log_id,
+        "winner_idx": winner_idx,
+        "winner_critic_results": winner_results,
+        "winner_all_pass": winner_all_pass,
+        "winner_failed_feedback": winner_feedback,
+        "fell_back": False,
+    }
+
+
 def run_orchestrated_step(
     db: Session,
     world: World,
@@ -481,65 +668,107 @@ def run_orchestrated_step(
         )
 
     # ----- author phase -----
-    seq += 1
     primary_author = cfg.authors[0]
-    author_started = datetime.utcnow()
-    author_t0 = time.monotonic()
     final_text = ""
     author_log_id = None
-    try:
-        from .author import run_author_for_step
-        from ..narrative.draft_cleanup import cleanup_old_drafts
-        ar = run_author_for_step(db, world, branch_id, start_tick, provider=provider)
-        if ar.ok and ar.log_id:
-            author_log_id = ar.log_id
-            final_text = ar.text or ""
-        elif ar.ok and not ar.log_id:
-            # no draft / no style 等"软回落"
-            final_text = ""
-        else:
-            final_text = ar.text or ""
-        cleanup_old_drafts(db, branch_id)
-        # author 内部会调一次 LLM，加进 budget
-        budget.calls += 0 if ar.fell_back else 1
-        author_status = "done"
-        author_err = ""
-    except Exception as e:
-        log.exception("author phase crashed")
-        author_status = "error"
-        author_err = str(e)[:500]
+    best_of_state: Optional[dict] = None
 
-    # 若 final_text 为空，从库里反查最新 author_final / director_draft 兜底
-    if not final_text:
-        log_row = (
-            db.query(NarrativeLog)
-            .filter(
-                NarrativeLog.branch_id == branch_id,
-                NarrativeLog.tick >= start_tick,
-                NarrativeLog.role.in_(["author_final", "director_draft", "narrator"]),
+    # arc critic 用的章节回顾：提到 author 阶段之前算，后续 best-of-K 评分 + 正式 critic 阶段共用
+    arc_context: Optional[str] = None
+    if cfg.critics and any(c.kind == "arc" for c in cfg.critics):
+        from ..narrative.recap import build_chapter_recap_block
+        try:
+            arc_context = build_chapter_recap_block(db, world)
+        except Exception as e:
+            log.warning("build_chapter_recap_block failed: %s", e)
+            arc_context = ""
+
+    # 优先 best-of-K（K>1 + 有 critic）
+    if cfg.author_best_of > 1 and cfg.critics:
+        from ..core.simulator import CancelledError
+        try:
+            best_of_state = _best_of_k_author_phase(
+                db, job_id, world, seq, branch_id, start_tick,
+                primary_author, cfg, provider, budget, cancel_check, arc_context,
             )
-            .order_by(NarrativeLog.created_at.desc())
-            .first()
-        )
-        if log_row and log_row.text:
-            final_text = log_row.text
-            author_log_id = log_row.id
+        except CancelledError:
+            return {
+                "ok": False, "tick": world.current_tick, "tick_start": start_tick,
+                "hops": sim_result.get("hops", 0), "tool_calls": sim_result.get("tool_calls", []),
+                "narration": "", "critic_rounds": 0, "final_verdict": "cancelled",
+                "unresolved_critics": [],
+                "budget_used": {"llm_calls": budget.calls, "wall_seconds": int(time.monotonic() - budget.start)},
+            }
+        except BudgetExhausted:
+            return {
+                "ok": False, "tick": world.current_tick, "tick_start": start_tick,
+                "hops": sim_result.get("hops", 0), "tool_calls": sim_result.get("tool_calls", []),
+                "narration": "", "critic_rounds": 0, "final_verdict": "budget_exhausted",
+                "unresolved_critics": [],
+                "budget_used": {"llm_calls": budget.calls, "wall_seconds": int(time.monotonic() - budget.start)},
+            }
+        if best_of_state is not None:
+            seq = best_of_state["seq_after"]
+            final_text = best_of_state["final_text"]
+            author_log_id = best_of_state["author_log_id"]
+            from ..narrative.draft_cleanup import cleanup_old_drafts
+            cleanup_old_drafts(db, branch_id)
 
-    _write_trace(
-        db, job_id=job_id, world_id=world.id, seq=seq,
-        role="author", agent_name=primary_author.name,
-        model=primary_author.model,
-        status=author_status if final_text else "error",
-        input_summary=f"汇总本回合 director_draft（tick {start_tick}+）",
-        output_summary=_summarize(final_text, 300),
-        extra={
-            "duration_ms": int((time.monotonic() - author_t0) * 1000),
-            "log_id": author_log_id,
-            "char_count": len(final_text),
-            "error": author_err if author_status == "error" else None,
-        },
-        started_at=author_started, ended_at=datetime.utcnow(),
-    )
+    # 单次 author（K=1，或 best-of-K 早退）
+    if best_of_state is None:
+        seq += 1
+        author_started = datetime.utcnow()
+        author_t0 = time.monotonic()
+        try:
+            from .author import run_author_for_step
+            from ..narrative.draft_cleanup import cleanup_old_drafts
+            ar = run_author_for_step(db, world, branch_id, start_tick, provider=provider)
+            if ar.ok and ar.log_id:
+                author_log_id = ar.log_id
+                final_text = ar.text or ""
+            elif ar.ok and not ar.log_id:
+                final_text = ""
+            else:
+                final_text = ar.text or ""
+            cleanup_old_drafts(db, branch_id)
+            budget.calls += 0 if ar.fell_back else 1
+            author_status = "done"
+            author_err = ""
+        except Exception as e:
+            log.exception("author phase crashed")
+            author_status = "error"
+            author_err = str(e)[:500]
+
+        if not final_text:
+            log_row = (
+                db.query(NarrativeLog)
+                .filter(
+                    NarrativeLog.branch_id == branch_id,
+                    NarrativeLog.tick >= start_tick,
+                    NarrativeLog.role.in_(["author_final", "director_draft", "narrator"]),
+                )
+                .order_by(NarrativeLog.created_at.desc())
+                .first()
+            )
+            if log_row and log_row.text:
+                final_text = log_row.text
+                author_log_id = log_row.id
+
+        _write_trace(
+            db, job_id=job_id, world_id=world.id, seq=seq,
+            role="author", agent_name=primary_author.name,
+            model=primary_author.model,
+            status=author_status if final_text else "error",
+            input_summary=f"汇总本回合 director_draft（tick {start_tick}+）",
+            output_summary=_summarize(final_text, 300),
+            extra={
+                "duration_ms": int((time.monotonic() - author_t0) * 1000),
+                "log_id": author_log_id,
+                "char_count": len(final_text),
+                "error": author_err if author_status == "error" else None,
+            },
+            started_at=author_started, ended_at=datetime.utcnow(),
+        )
 
     # ----- critic phase -----
     final_verdict = "no_critics"
@@ -562,112 +791,124 @@ def run_orchestrated_step(
             )
         else:
             prev_by_critic: dict[str, dict] = {}
-            # arc critic 需要章节回顾。任一 critic 是 arc kind 才算一次 build（避免无谓 IO）
-            arc_context: Optional[str] = None
-            if any(c.kind == "arc" for c in cfg.critics):
-                from ..narrative.recap import build_chapter_recap_block
-                try:
-                    arc_context = build_chapter_recap_block(db, world)
-                except Exception as e:  # 不让 recap 故障阻断推演
-                    log.warning("build_chapter_recap_block failed: %s", e)
-                    arc_context = ""
-            for iter_idx in range(cfg.max_critic_retries + 1):
-                critic_rounds = iter_idx + 1
-                feedback: list[dict] = []
-                # parallel: 全部 critic 都跑完再决定。serial: 第一个 fail 立即停。
-                if cfg.critic_mode == "serial":
-                    for c in cfg.critics:
-                        seq += 1
-                        try:
-                            parsed, _ = _run_one_critic(
-                                db, job_id, world, seq, iter_idx, c,
-                                final_text, user_directive, critic_provider, budget, cancel_check,
-                                previous_round=prev_by_critic.get(c.name),
-                                arc_context=arc_context if c.kind == "arc" else None,
-                            )
-                        except BudgetExhausted:
-                            final_verdict = "budget_exhausted"
-                            break
-                        except CancelledError:
-                            final_verdict = "cancelled"
-                            break
-                        prev_by_critic[c.name] = {
-                            "verdict": parsed["verdict"],
-                            "reason": parsed["reason"],
-                            "suggestions": parsed["suggestions"],
-                        }
-                        if parsed["verdict"] == "fail":
-                            feedback.append({
-                                "name": c.name,
-                                "reason": parsed["reason"],
-                                "suggestions": parsed["suggestions"],
-                            })
-                            break  # serial：第一个 fail 即触发 rewrite
-                    if final_verdict in ("budget_exhausted", "cancelled"):
-                        break
-                else:  # parallel
-                    for c in cfg.critics:
-                        seq += 1
-                        try:
-                            parsed, _ = _run_one_critic(
-                                db, job_id, world, seq, iter_idx, c,
-                                final_text, user_directive, critic_provider, budget, cancel_check,
-                                previous_round=prev_by_critic.get(c.name),
-                                arc_context=arc_context if c.kind == "arc" else None,
-                            )
-                        except BudgetExhausted:
-                            final_verdict = "budget_exhausted"
-                            break
-                        except CancelledError:
-                            final_verdict = "cancelled"
-                            break
-                        prev_by_critic[c.name] = {
-                            "verdict": parsed["verdict"],
-                            "reason": parsed["reason"],
-                            "suggestions": parsed["suggestions"],
-                        }
-                        if parsed["verdict"] == "fail":
-                            feedback.append({
-                                "name": c.name,
-                                "reason": parsed["reason"],
-                                "suggestions": parsed["suggestions"],
-                            })
-                    if final_verdict in ("budget_exhausted", "cancelled"):
-                        break
+            seeded_feedback: Optional[list[dict]] = None  # best-of-K 在 ranking 阶段已得到的 feedback
 
-                if not feedback:
+            # best-of-K 已经在 ranking 阶段跑过 critic：抽出结果做 seed，避免对 winner 文本再跑一遍 critic
+            if best_of_state is not None:
+                critic_rounds = 1  # ranking 算 1 轮
+                for c_name, parsed in (best_of_state.get("winner_critic_results") or {}).items():
+                    prev_by_critic[c_name] = {
+                        "verdict": parsed.get("verdict", ""),
+                        "reason": parsed.get("reason", ""),
+                        "suggestions": parsed.get("suggestions", ""),
+                    }
+                if best_of_state.get("winner_all_pass"):
                     final_verdict = "pass"
-                    break
-
-                # 还有重试机会才 rewrite
-                if iter_idx < cfg.max_critic_retries:
-                    seq += 1
-                    try:
-                        new_text, _ = _author_rewrite(
-                            db, job_id, world, seq, iter_idx + 1,
-                            branch_id, start_tick, feedback, critic_provider, budget, cancel_check,
-                        )
-                        final_text = new_text or final_text
-                    except BudgetExhausted:
-                        final_verdict = "budget_exhausted"
-                        break
-                    except CancelledError:
-                        final_verdict = "cancelled"
-                        break
                 else:
-                    # 用完重试次数，强制接受
-                    final_verdict = "forced_accept"
-                    unresolved_feedback = feedback
-                    seq += 1
-                    _write_trace(
-                        db, job_id=job_id, world_id=world.id, seq=seq,
-                        role="orchestrator", agent_name="(forced accept)",
-                        status="done", verdict="forced_accept",
-                        input_summary=f"已重写 {cfg.max_critic_retries} 次",
-                        output_summary=f"达到重试上限，强制接受当前定稿（仍有 {len(feedback)} 个 critic 反对）",
-                        extra={"feedback": feedback, "is_forced_accept": True},
-                    )
-                    break
+                    seeded_feedback = list(best_of_state.get("winner_failed_feedback") or [])
+
+            if final_verdict not in ("pass",):
+                for iter_idx in range(cfg.max_critic_retries + 1):
+                    feedback: list[dict] = []
+                    # 第一轮且有 seed：直接用 ranking 阶段结果，不再调 critic
+                    if iter_idx == 0 and seeded_feedback is not None:
+                        feedback = list(seeded_feedback)
+                    elif cfg.critic_mode == "serial":
+                        critic_rounds += 1
+                        for c in cfg.critics:
+                            seq += 1
+                            try:
+                                parsed, _ = _run_one_critic(
+                                    db, job_id, world, seq, iter_idx, c,
+                                    final_text, user_directive, critic_provider, budget, cancel_check,
+                                    previous_round=prev_by_critic.get(c.name),
+                                    arc_context=arc_context if c.kind == "arc" else None,
+                                )
+                            except BudgetExhausted:
+                                final_verdict = "budget_exhausted"
+                                break
+                            except CancelledError:
+                                final_verdict = "cancelled"
+                                break
+                            prev_by_critic[c.name] = {
+                                "verdict": parsed["verdict"],
+                                "reason": parsed["reason"],
+                                "suggestions": parsed["suggestions"],
+                            }
+                            if parsed["verdict"] == "fail":
+                                feedback.append({
+                                    "name": c.name,
+                                    "reason": parsed["reason"],
+                                    "suggestions": parsed["suggestions"],
+                                })
+                                break  # serial：第一个 fail 即触发 rewrite
+                        if final_verdict in ("budget_exhausted", "cancelled"):
+                            break
+                    else:  # parallel
+                        critic_rounds += 1
+                        for c in cfg.critics:
+                            seq += 1
+                            try:
+                                parsed, _ = _run_one_critic(
+                                    db, job_id, world, seq, iter_idx, c,
+                                    final_text, user_directive, critic_provider, budget, cancel_check,
+                                    previous_round=prev_by_critic.get(c.name),
+                                    arc_context=arc_context if c.kind == "arc" else None,
+                                )
+                            except BudgetExhausted:
+                                final_verdict = "budget_exhausted"
+                                break
+                            except CancelledError:
+                                final_verdict = "cancelled"
+                                break
+                            prev_by_critic[c.name] = {
+                                "verdict": parsed["verdict"],
+                                "reason": parsed["reason"],
+                                "suggestions": parsed["suggestions"],
+                            }
+                            if parsed["verdict"] == "fail":
+                                feedback.append({
+                                    "name": c.name,
+                                    "reason": parsed["reason"],
+                                    "suggestions": parsed["suggestions"],
+                                })
+                        if final_verdict in ("budget_exhausted", "cancelled"):
+                            break
+
+                    if not feedback:
+                        final_verdict = "pass"
+                        break
+
+                    # 还有重试机会才 rewrite
+                    if iter_idx < cfg.max_critic_retries:
+                        seq += 1
+                        try:
+                            new_text, _ = _author_rewrite(
+                                db, job_id, world, seq, iter_idx + 1,
+                                branch_id, start_tick, feedback, critic_provider, budget, cancel_check,
+                            )
+                            final_text = new_text or final_text
+                            seeded_feedback = None  # 已经基于 seed rewrite 完，下一轮要真跑 critic
+                        except BudgetExhausted:
+                            final_verdict = "budget_exhausted"
+                            break
+                        except CancelledError:
+                            final_verdict = "cancelled"
+                            break
+                    else:
+                        # 用完重试次数，强制接受
+                        final_verdict = "forced_accept"
+                        unresolved_feedback = feedback
+                        seq += 1
+                        _write_trace(
+                            db, job_id=job_id, world_id=world.id, seq=seq,
+                            role="orchestrator", agent_name="(forced accept)",
+                            status="done", verdict="forced_accept",
+                            input_summary=f"已重写 {cfg.max_critic_retries} 次",
+                            output_summary=f"达到重试上限，强制接受当前定稿（仍有 {len(feedback)} 个 critic 反对）",
+                            extra={"feedback": feedback, "is_forced_accept": True},
+                        )
+                        break
 
     progress({"phase": "orchestrator_done", "verdict": final_verdict, "rounds": critic_rounds})
 
@@ -726,17 +967,30 @@ def query_pipeline_metrics(db: Session, world_id: str, hours: int = 168) -> dict
         if not critic_traces:
             continue
         total_jobs += 1
-        max_iter = max(t.iteration for t in critic_traces)
-        critic_rounds = max_iter + 1
+        non_ranking = [t for t in critic_traces if not (t.extra or {}).get("is_ranking")]
+        bok_pick = next(
+            (t for t in traces if t.role == "orchestrator" and t.agent_name == "(best-of-K pick)"),
+            None,
+        )
+        # critic_rounds: best-of-K 的 ranking 算 1 轮 + 后续重试循环每轮算 1
+        if bok_pick is not None:
+            loop_rounds = (max((t.iteration for t in non_ranking), default=-1) + 1)
+            critic_rounds = 1 + loop_rounds
+        else:
+            critic_rounds = max(t.iteration for t in critic_traces) + 1
         rounds_total += critic_rounds
         if critic_rounds > 1:
             rounds_when_retried_total += critic_rounds
             rounds_when_retried_count += 1
 
-        # 第一轮全 pass = first_pass
-        round0 = [t for t in critic_traces if t.iteration == 0]
-        if round0 and all(t.verdict == "pass" for t in round0):
-            first_pass_jobs += 1
+        # first_pass：K=1 看 round 0 全 pass；best-of-K 看 winner_all_pass
+        if bok_pick is not None:
+            if (bok_pick.extra or {}).get("winner_all_pass"):
+                first_pass_jobs += 1
+        else:
+            round0 = [t for t in critic_traces if t.iteration == 0]
+            if round0 and all(t.verdict == "pass" for t in round0):
+                first_pass_jobs += 1
 
         # forced_accept 检测
         fa = next(

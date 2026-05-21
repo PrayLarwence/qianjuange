@@ -42,6 +42,19 @@ class AuthorResult:
     fell_back: bool = False  # True 表示走了"粗稿 promote 为定稿"的回落分支
 
 
+@dataclass
+class _AuthorPrep:
+    """run_author_for_step 内部共享的输入：drafts 及构造 prompt 所需的全部上下文。
+
+    best-of-K 模式下 orchestrator 会复用本结构以多次调用 LLM。
+    """
+    style: StyleProfile
+    drafts: list[NarrativeLog]
+    draft_text: str
+    system_prompt: str
+    user_prompt: str
+
+
 def _new_id() -> str:
     import uuid
     return f"nar_{uuid.uuid4().hex[:10]}"
@@ -194,6 +207,39 @@ def run_author_for_step(
     4. 否则调 LLM 改写，写一行 author_final（parent_log_id 指向第一条 draft）
     5. 输出长度异常或 LLM 异常 → 同样回落
     """
+    prep, early = prepare_author_inputs(db, world, branch_id, start_tick, long_memory=long_memory)
+    if early is not None:
+        return early
+    assert prep is not None
+
+    try:
+        llm = provider or get_provider_for_role(world, "author")
+    except Exception as e:
+        log.warning("author provider resolution failed: %s", e)
+        return write_author_fallback(db, prep, reason=f"provider error: {e}")
+    if llm is None:
+        return write_author_fallback(db, prep, reason="no provider")
+
+    text, reason = call_author_llm_once(llm, prep, temperature=0.85)
+    if text is None:
+        return write_author_fallback(db, prep, reason=reason)
+    return write_author_final(db, prep, text)
+
+
+def prepare_author_inputs(
+    db: Session,
+    world: World,
+    branch_id: str,
+    start_tick: int,
+    *,
+    long_memory: str = "",
+) -> tuple[Optional[_AuthorPrep], Optional[AuthorResult]]:
+    """收集粗稿 + 风格 + 上下文，retag narrator → director_draft，构造 system/user prompt。
+
+    返回 (prep, early_result)：
+      - prep != None：可继续调 LLM
+      - early_result != None：无草稿 / 无风格的早退路径，调用方直接返回
+    """
     drafts = (
         db.query(NarrativeLog)
         .filter(
@@ -205,41 +251,18 @@ def run_author_for_step(
         .all()
     )
     if not drafts:
-        return AuthorResult(ok=True, reason="no draft")
+        return None, AuthorResult(ok=True, reason="no draft")
 
-    # 没绑风格：保持老行为不动，narrator 仍是 narrator，不引入草稿/定稿区分
     style = _resolve_style(db, world)
     if style is None:
-        return AuthorResult(ok=True, reason="no style profile (legacy world)", fell_back=False)
+        return None, AuthorResult(ok=True, reason="no style profile (legacy world)", fell_back=False)
 
-    # 绑了风格才进入"草稿 → 定稿"管线：先 retag narrator → director_draft
     for d in drafts:
         d.role = "director_draft"
     db.flush()
 
     draft_text = _format_drafts(drafts)
 
-    def _fallback(reason: str) -> AuthorResult:
-        # 回落：用第一条 draft 复制一行为 author_final，文本是所有 draft 拼接
-        final = NarrativeLog(
-            id=_new_id(), branch_id=branch_id, tick=drafts[0].tick,
-            role="author_final", text=draft_text, revision_index=0,
-            parent_log_id=drafts[0].id,
-        )
-        db.add(final); db.commit()
-        return AuthorResult(ok=True, log_id=final.id, text=draft_text,
-                            reason=reason, fell_back=True)
-
-    # 取 LLM
-    try:
-        llm = provider or get_provider_for_role(world, "author")
-    except Exception as e:
-        log.warning("author provider resolution failed: %s", e)
-        return _fallback(f"provider error: {e}")
-    if llm is None:
-        return _fallback("no provider")
-
-    # 收集 context
     events = (
         db.query(Event)
         .filter(Event.branch_id == branch_id, Event.tick >= start_tick, Event.deleted == 0)
@@ -258,36 +281,65 @@ def run_author_for_step(
         events_text=events_text,
         draft_text=draft_text,
     )
+    return _AuthorPrep(
+        style=style, drafts=drafts, draft_text=draft_text,
+        system_prompt=system, user_prompt=user,
+    ), None
 
+
+def call_author_llm_once(
+    llm: LLMProvider,
+    prep: _AuthorPrep,
+    *,
+    temperature: float = 0.85,
+) -> tuple[Optional[str], str]:
+    """单次 LLM 调用 + 长度健康度校验。
+
+    成功返回 (text, "ok")；任何失败返回 (None, reason)。无 DB 写入。
+    """
     try:
         resp = llm.chat(
-            system=system,
-            messages=[Message(role="user", content=user)],
+            system=prep.system_prompt,
+            messages=[Message(role="user", content=prep.user_prompt)],
             tools=[],
             max_tokens=4096,
-            temperature=0.85,
+            temperature=temperature,
             timeout=90.0,
         )
     except Exception as e:
         log.warning("author LLM call failed: %s", e)
-        return _fallback(f"llm error: {e}")
+        return None, f"llm error: {e}"
 
     text = (resp.text or "").strip()
     if not text:
-        return _fallback("empty output")
+        return None, "empty output"
 
-    # 长度健康度
-    draft_len = max(1, len(draft_text))
-    out_len = len(text)
-    ratio = out_len / draft_len
+    draft_len = max(1, len(prep.draft_text))
+    ratio = len(text) / draft_len
     if ratio < MIN_OUTPUT_RATIO or ratio > MAX_OUTPUT_RATIO:
-        log.info("author output length suspicious (ratio=%.2f); falling back", ratio)
-        return _fallback(f"length anomaly (ratio={ratio:.2f})")
+        log.info("author output length suspicious (ratio=%.2f); rejecting", ratio)
+        return None, f"length anomaly (ratio={ratio:.2f})"
+    return text, "ok"
 
+
+def write_author_final(db: Session, prep: _AuthorPrep, text: str) -> AuthorResult:
+    """把成功输出落库为 author_final。"""
     final = NarrativeLog(
-        id=_new_id(), branch_id=branch_id, tick=drafts[0].tick,
+        id=_new_id(), branch_id=prep.drafts[0].branch_id, tick=prep.drafts[0].tick,
         role="author_final", text=text, revision_index=0,
-        parent_log_id=drafts[0].id,
+        parent_log_id=prep.drafts[0].id,
     )
     db.add(final); db.commit()
     return AuthorResult(ok=True, log_id=final.id, text=text, fell_back=False)
+
+
+def write_author_fallback(db: Session, prep: _AuthorPrep, *, reason: str) -> AuthorResult:
+    """LLM 失败时把粗稿 promote 为 author_final。"""
+    final = NarrativeLog(
+        id=_new_id(), branch_id=prep.drafts[0].branch_id, tick=prep.drafts[0].tick,
+        role="author_final", text=prep.draft_text, revision_index=0,
+        parent_log_id=prep.drafts[0].id,
+    )
+    db.add(final); db.commit()
+    return AuthorResult(ok=True, log_id=final.id, text=prep.draft_text,
+                        reason=reason, fell_back=True)

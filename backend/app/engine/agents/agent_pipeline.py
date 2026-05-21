@@ -27,6 +27,7 @@ MAX_DIRECTORS = 3
 MAX_AUTHORS = 1
 MAX_CRITICS = 5
 MAX_RETRIES_HARD_CAP = 5  # 用户在 UI 改 max_critic_retries 时不能超过这个
+MAX_AUTHOR_BEST_OF = 4  # best-of-K 的 K 上限
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 DEFAULT_PATH = DATA_DIR / "agent_pipeline_default.json"
@@ -67,6 +68,8 @@ class PipelineConfig(BaseModel):
     critics: list[CriticAgent] = Field(default_factory=list)
     max_critic_retries: int = Field(default=3, ge=0, le=MAX_RETRIES_HARD_CAP)
     critic_mode: Literal["parallel", "serial"] = "parallel"
+    # K=1: 单次 author 调用 (默认/老行为)。K>1: 并行生成 K 候选, 用 critic 总分选最优后再走 critic 重写循环
+    author_best_of: int = Field(default=1, ge=1, le=MAX_AUTHOR_BEST_OF)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
 
     @field_validator("directors")
@@ -149,4 +152,5 @@ LIMITS = {
     "max_authors": MAX_AUTHORS,
     "max_critics": MAX_CRITICS,
     "max_retries_hard_cap": MAX_RETRIES_HARD_CAP,
+    "max_author_best_of": MAX_AUTHOR_BEST_OF,
 }
