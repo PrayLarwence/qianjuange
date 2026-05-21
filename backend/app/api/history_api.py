@@ -137,7 +137,7 @@ def import_world(payload: WorldImport, db: Session = Depends(get_db)):
         db.add(Entity(
             id=remap(e["id"]), branch_id=remap(e["branch_id"]),
             type=e["type"], name=e["name"], summary=e.get("summary", ""),
-            attributes=e.get("attributes") or {}, state=e.get("state") or {},
+            attributes=e.get("attributes") or {}, aliases=e.get("aliases") or [], state=e.get("state") or {},
             location_id=remap(e.get("location_id")) if e.get("location_id") else None,
             created_at_tick=e.get("created_at_tick", 0), alive=e.get("alive", 1),
         ))

@@ -52,6 +52,15 @@ def execute_tool(db: Session, world: World, name: str, args: dict[str, Any]) -> 
     raise ToolError(f"unknown tool: {name}")
 
 
+def _extract_aliases(attrs: dict | None) -> list[str]:
+    if not isinstance(attrs, dict):
+        return []
+    raw = attrs.pop("aliases", None) if isinstance(attrs, dict) else None
+    if isinstance(raw, list):
+        return [str(a).strip() for a in raw if isinstance(a, str) and a.strip()]
+    return []
+
+
 def _create_entity(db: Session, branch_id: str, tick: int, args: dict[str, Any]) -> dict[str, Any]:
     if not args.get("type") or not args.get("name"):
         raise ToolError("create_entity: type and name required")
@@ -61,7 +70,8 @@ def _create_entity(db: Session, branch_id: str, tick: int, args: dict[str, Any])
         type=args["type"],
         name=args["name"],
         summary=args.get("summary", ""),
-        attributes=args.get("attributes", {}) or {},
+        attributes=dict(args.get("attributes", {}) or {}),
+        aliases=_extract_aliases(args.get("attributes", {}) or {}),
         state={},
         location_id=args.get("location_id"),
         created_at_tick=tick,
@@ -82,9 +92,17 @@ def _update_entity(db: Session, branch_id: str, args: dict[str, Any]) -> dict[st
     if "summary" in args and args["summary"] is not None:
         entity.summary = args["summary"]
     if "attributes" in args and isinstance(args["attributes"], dict):
+        attrs = dict(args["attributes"])
+        aliases_from_attrs = attrs.pop("aliases", None)
         merged = dict(entity.attributes or {})
-        merged.update(args["attributes"])
+        merged.update(attrs)
         entity.attributes = merged
+        if isinstance(aliases_from_attrs, list):
+            existing = list(entity.aliases or [])
+            for a in aliases_from_attrs:
+                if isinstance(a, str) and a.strip() and a not in existing:
+                    existing.append(a.strip())
+            entity.aliases = existing
     if "state" in args and isinstance(args["state"], dict):
         merged = dict(entity.state or {})
         merged.update(args["state"])
@@ -242,7 +260,7 @@ def _branch_world(db: Session, world: World, args: dict[str, Any]) -> dict[str, 
             type=entity.type,
             name=entity.name,
             summary=entity.summary,
-            attributes=dict(entity.attributes or {}),
+            attributes=dict(entity.attributes or {}), aliases=list(entity.aliases or []),
             state=dict(entity.state or {}),
             location_id=entity.location_id,
             created_at_tick=entity.created_at_tick,

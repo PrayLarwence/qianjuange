@@ -41,7 +41,7 @@ def _fork_branch(db: Session, world: World, parent_branch_id: str, name: str, de
         old_to_new[entity.id] = new_id
         db.add(Entity(
             id=new_id, branch_id=new_branch.id, type=entity.type, name=entity.name,
-            summary=entity.summary, attributes=dict(entity.attributes or {}),
+            summary=entity.summary, attributes=dict(entity.attributes or {}), aliases=list(entity.aliases or []),
             state=dict(entity.state or {}), location_id=None,
             created_at_tick=entity.created_at_tick, alive=entity.alive,
         ))

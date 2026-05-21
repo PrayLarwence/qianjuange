@@ -42,6 +42,27 @@ def _migrate() -> None:
             conn.exec_driver_sql("PRAGMA busy_timeout=5000")
         except Exception:
             pass
+        # Entity.aliases 独立列（从 attributes JSON 迁出）
+        try:
+            ecols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(entities)").fetchall()}
+            if ecols and "aliases" not in ecols:
+                conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN aliases TEXT DEFAULT '[]'")
+                # 从 attributes JSON 迁移
+                rows = conn.exec_driver_sql("SELECT id, attributes FROM entities WHERE attributes IS NOT NULL AND attributes != '{}'").fetchall()
+                import json
+                for eid, raw in rows:
+                    try:
+                        attrs = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                        aliases = attrs.pop("aliases", None) if isinstance(attrs, dict) else None
+                        if aliases and isinstance(aliases, list):
+                            conn.exec_driver_sql(
+                                "UPDATE entities SET aliases = ?, attributes = ? WHERE id = ?",
+                                (json.dumps(aliases, ensure_ascii=False), json.dumps(attrs, ensure_ascii=False), eid)
+                            )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(events)").fetchall()}
         if "deleted" not in cols:
             conn.exec_driver_sql("ALTER TABLE events ADD COLUMN deleted INTEGER DEFAULT 0")
@@ -136,6 +157,27 @@ def _migrate() -> None:
             cmcols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(chapter_markers)").fetchall()}
             if cmcols and "summary" not in cmcols:
                 conn.exec_driver_sql("ALTER TABLE chapter_markers ADD COLUMN summary TEXT DEFAULT ''")
+        except Exception:
+            pass
+
+        # Entity.aliases 独立列（从 attributes JSON 迁出）
+        try:
+            ecols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(entities)").fetchall()}
+            if ecols and "aliases" not in ecols:
+                conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN aliases TEXT DEFAULT '[]'")
+                rows = conn.exec_driver_sql("SELECT id, attributes FROM entities WHERE attributes IS NOT NULL AND attributes != '{}'").fetchall()
+                import json
+                for eid, raw in rows:
+                    try:
+                        attrs = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                        aliases = attrs.pop("aliases", None) if isinstance(attrs, dict) else None
+                        if aliases and isinstance(aliases, list):
+                            conn.exec_driver_sql(
+                                "UPDATE entities SET aliases = ?, attributes = ? WHERE id = ?",
+                                (json.dumps(aliases, ensure_ascii=False), json.dumps(attrs, ensure_ascii=False), eid)
+                            )
+                    except Exception:
+                        pass
         except Exception:
             pass
         # A2: IssuePatch 加 original_snapshot（apply 时存改前文本，用于 undo）

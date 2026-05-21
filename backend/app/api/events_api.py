@@ -193,7 +193,7 @@ def reconcile(world_id: str, payload: ReconcileRequest, db: Session = Depends(ge
         for entity in db.query(Entity).filter_by(branch_id=parent_id).all():
             db.add(Entity(
                 id=_new_id("ent"), branch_id=new_branch.id, type=entity.type, name=entity.name,
-                summary=entity.summary, attributes=dict(entity.attributes or {}),
+                summary=entity.summary, attributes=dict(entity.attributes or {}), aliases=list(entity.aliases or []),
                 state=dict(entity.state or {}), location_id=entity.location_id,
                 created_at_tick=entity.created_at_tick, alive=entity.alive,
             ))

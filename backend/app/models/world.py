@@ -68,7 +68,8 @@ class Entity(Base):
     type = Column(String, nullable=False)
     name = Column(String, nullable=False)
     summary = Column(Text, default="")
-    attributes = Column(JSON, default=dict)
+    attributes = Column(JSON, default=dict)  # _relations / _emotion_curve / custom attrs
+    aliases = Column(JSON, default=list)      # ["小明", "明哥", …] — 角色别名列表
     state = Column(JSON, default=dict)
     location_id = Column(String, ForeignKey("entities.id"), nullable=True)
     created_at_tick = Column(Integer, default=0)

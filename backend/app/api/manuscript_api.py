@@ -106,7 +106,8 @@ def create_world_from_manuscript(payload: ManuscriptIngest, db: Session = Depend
         db.add(Entity(
             id=_new_id("ent"), branch_id=main.id, type="character",
             name=c["name"], summary=c.get("summary", ""),
-            attributes={"aliases": aliases} if aliases else {},
+            attributes={},
+            aliases=aliases,
             state={},
             tags=c.get("tags") or [],
             pinned=1 if cast_count < 5 else 0,
@@ -211,7 +212,8 @@ def create_world_from_manuscript_async(payload: ManuscriptIngest, db: Session = 
                 local_db.add(Entity(
                     id=_new_id("ent"), branch_id=main.id, type="character",
                     name=c["name"], summary=c.get("summary", ""),
-                    attributes={"aliases": aliases} if aliases else {},
+                    attributes={},
+                    aliases=aliases,
                     state={},
                     tags=c.get("tags") or [],
                     pinned=1 if cast_count < 5 else 0,
@@ -324,7 +326,7 @@ def extract_manuscript_events_async(
                 loc_to_id[e.name] = e.id
             else:
                 name_to_id[e.name] = e.id
-                for a in (e.attributes or {}).get("aliases") or []:
+                for a in (e.aliases or []):
                     if isinstance(a, str) and a.strip() and a not in name_to_id:
                         name_to_id[a.strip()] = e.id
 
