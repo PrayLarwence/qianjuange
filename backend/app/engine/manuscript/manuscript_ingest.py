@@ -31,10 +31,14 @@ MAX_ALIASES_PER_CAST = 6
 
 # 章节切分的优先级
 _CHAPTER_PATTERNS = [
-    re.compile(r"^\s*第\s*[一二三四五六七八九十百千万零〇0-9]+\s*[章回卷部节]\b.*$", re.MULTILINE),
+    re.compile(r"^\s*第\s*[一二三四五六七八九十百千万零〇0-9]+\s*[章回卷部节]\s*[：:\s]?.*$", re.MULTILINE),
     re.compile(r"^\s*[Cc]hapter\s+\d+\b.*$", re.MULTILINE),
     re.compile(r"^\s*#{1,3}\s+.+$", re.MULTILINE),
 ]
+# 至少要有这么多章才算"分章成功"；不够就走按字数切
+_MIN_CHAPTERS_FOR_CHAPTER_MODE = 3
+# 按字数切分时每段最大字数
+_CHUNK_CHARS = 5_000
 
 
 @dataclass
@@ -60,9 +64,12 @@ def split_into_chapters(text: str, *, max_chunks: int = MAX_OUTLINE) -> list[Chu
     matches: list[tuple[int, int, str]] = []  # (start, end, title)
     for pat in _CHAPTER_PATTERNS:
         ms = list(pat.finditer(text))
-        if len(ms) >= 2:
+        if len(ms) >= _MIN_CHAPTERS_FOR_CHAPTER_MODE:
             for m in ms:
-                matches.append((m.start(), m.end(), m.group(0).strip()))
+                title = m.group(0).strip()[:120]
+                if re.search(r'[）\)]', title):
+                    continue
+                matches.append((m.start(), m.end(), title))
             break
 
     chunks: list[Chunk] = []
@@ -85,9 +92,44 @@ def split_into_chapters(text: str, *, max_chunks: int = MAX_OUTLINE) -> list[Chu
             title = first_line[:60] if len(first_line) <= 60 else f"片段 {i + 1}"
             chunks.append(Chunk(title=title, text=p))
 
+    if len(chunks) < _MIN_CHAPTERS_FOR_CHAPTER_MODE and len(text) > _CHUNK_CHARS * 2:
+        chunks = _chunk_by_length(text, _CHUNK_CHARS, max_chunks)
+
     if len(chunks) > max_chunks:
         chunks = chunks[:max_chunks]
     return chunks
+
+
+
+def _chunk_by_length(text: str, chunk_chars: int, max_chunks: int) -> list[Chunk]:
+    """按字数切分，在段落边界断开。"""
+    paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+    chunks: list[Chunk] = []
+    buf: list[str] = []
+    buf_len = 0
+    idx = 0
+
+    def flush():
+        nonlocal idx
+        if buf:
+            idx += 1
+            preview = buf[0][:40]
+            chunks.append(Chunk(
+                title=f"片段 {idx}：{preview}" if len(buf[0])>40 else f"片段 {idx}：{preview}",
+                text="\n".join(buf)))
+            buf.clear()
+            nonlocal buf_len
+            buf_len = 0
+
+    for p in paragraphs:
+        if buf_len + len(p) > chunk_chars and buf:
+            flush()
+        buf.append(p)
+        buf_len += len(p)
+
+    flush()
+    return chunks[-max_chunks:] if max_chunks > 0 else chunks
+
 
 
 SYSTEM_PROMPT = """你是文学作品分析师。我会给你一部小说的若干章节（可能是全书也可能是其中一段），请反推作者构造的世界骨架。

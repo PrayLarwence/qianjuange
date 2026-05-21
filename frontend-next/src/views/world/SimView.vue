@@ -165,6 +165,7 @@ async function runSingle() {
     lastResult.value = r;
     if (r.narration) liveNarration.value = r.narration;
     await refreshAfterRun(r);
+    autoScrollStream();
     toast.success(`完成 1 步，当前 tick = ${world.value?.current_tick ?? '?'}`);
   } catch (e: any) {
     runError.value = e.message || String(e);
@@ -400,8 +401,31 @@ function toolArgPreview(c: JobToolCall): string {
 
       <!-- 中：实时流 + 结果 -->
       <main ref="streamEl" class="flex-1 min-w-0 overflow-y-auto px-8 py-8">
-        <!-- 空态 -->
-        <div v-if="!running && !lastResult && !runError"
+        <!-- 空态 / 引导 -->
+        <div v-if="!running && !lastResult && !runError && newEvents.length === 0"
+             class="max-w-2xl mx-auto pt-20 text-center">
+          <template v-if="(world?.current_tick ?? 0) === 0">
+            <p class="font-serif text-2xl mb-3">这个世界还没有事件</p>
+            <p class="text-muted leading-relaxed mb-4">
+              如果你从手稿导入，先去
+              <router-link :to="`/worlds/${worldId}/settings`" class="text-accent underline">世界设置</router-link>
+              抽取事件草稿并审阅落库，然后再来推演。
+            </p>
+          </template>
+          <template v-else>
+            <p class="font-serif text-2xl mb-3">让故事往前走一点</p>
+            <p class="text-muted leading-relaxed mb-6">
+              输入一个具体指令，或者直接点「推演 1 步」让 AI 自由接龙。<br />
+              想要更多角色视角时用「多角色推演」。
+            </p>
+            <div class="text-xs text-muted space-y-1.5">
+              <div><span class="font-mono text-text">↻ 1 步</span> — 同步执行，秒回</div>
+              <div><span class="font-mono text-text">⏵ 自动 N 步</span> — 后台跑，可取消</div>
+              <div><span class="font-mono text-text">☻ 多角色</span> — 每个焦点角色出意图，再合并</div>
+            </div>
+          </template>
+        </div>
+        <div v-else-if="!running && !lastResult && !runError"
              class="max-w-2xl mx-auto pt-20 text-center">
           <p class="font-serif text-2xl mb-3">让故事往前走一点</p>
           <p class="text-muted leading-relaxed mb-6">
