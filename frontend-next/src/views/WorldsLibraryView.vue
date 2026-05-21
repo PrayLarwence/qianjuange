@@ -87,14 +87,17 @@ async function onJsonPicked(ev: Event) {
 
 // 从手稿建世界
 const manuscriptOpen = ref(false);
-const manuscriptDraft = ref({ name: '', description: '', text: '' });
+const manuscriptDraft = ref<{ name: string; description: string; text: string; _bigText?: string; _fileSize?: number }>({ name: '', description: '', text: '' });
 const manuscriptBusy = ref(false);
 const manuscriptResult = ref<{
   ok: boolean; world_id: string;
   stats: { chunks: number; outline: number; cast: number; locations: number; factions: number };
   warnings: string[];
 } | null>(null);
-const manuscriptCharCount = computed(() => manuscriptDraft.value.text.length);
+const manuscriptCharCount = computed(() => {
+  if (manuscriptDraft.value._fileSize) return `${(manuscriptDraft.value._fileSize / 1024 / 1024).toFixed(1)} MB`;
+  return `${manuscriptDraft.value.text.length.toLocaleString()} 字`;
+});
 
 function openManuscript() {
   manuscriptDraft.value = { name: '', description: '', text: '' };
@@ -111,10 +114,15 @@ async function onManuscriptFile(ev: Event) {
     return;
   }
   try {
-    const text = await f.text();
-    manuscriptDraft.value.text = text;
+    manuscriptDraft.value.text = '';
+    if (f.size > 512 * 1024) {
+      manuscriptDraft.value._bigText = await f.text();
+      manuscriptDraft.value._fileSize = f.size;
+    } else {
+      manuscriptDraft.value.text = await f.text();
+    }
     if (!manuscriptDraft.value.name.trim()) {
-      manuscriptDraft.value.name = f.name.replace(/\.(txt|md|markdown)$/i, '');
+      manuscriptDraft.value.name = f.name.replace(/\.(txt|md|markdown|html?|htm)$/i, '');
     }
   } catch (e: any) {
     toast.error(`读取失败：${e.message || e}`);
@@ -122,17 +130,16 @@ async function onManuscriptFile(ev: Event) {
 }
 async function submitManuscript() {
   const name = manuscriptDraft.value.name.trim();
-  const text = manuscriptDraft.value.text;
+  const text = manuscriptDraft.value.text || manuscriptDraft.value._bigText || '';
   if (!name) { toast.error('请填写世界名称'); return; }
   if (text.length < 50) { toast.error('手稿内容太短，至少 50 字'); return; }
   manuscriptBusy.value = true;
   try {
     if (text.length > 100_000) {
-      // 长文本用异步端点，避免超时
       const r = await worldsApi.fromManuscriptAsync({
         name, text, description: manuscriptDraft.value.description.trim() || undefined,
       });
-      toast.info(`已启动后台导入（job: ${r.job_id.slice(0,12)}…），请稍后刷新世界列表`);
+      toast.info(`已启动后台导入（job: ${r.job_id.slice(0,12)}…），稍后刷新世界列表`);
       manuscriptOpen.value = false;
     } else {
       const r = await worldsApi.fromManuscript({
@@ -282,13 +289,17 @@ async function doDelete() {
                        class="hidden" @change="onManuscriptFile" />
               </label>
               <span class="text-xs text-muted font-mono">
-                {{ manuscriptCharCount.toLocaleString() }} 字
+                {{ manuscriptCharCount }}
               </span>
             </div>
           </div>
-          <textarea v-model="manuscriptDraft.text" rows="14"
+          <textarea v-if="!manuscriptDraft._bigText" v-model="manuscriptDraft.text" rows="14"
                     class="input !h-auto py-2 font-serif leading-relaxed text-sm"
                     placeholder="把你的小说粘进来，或者点上面的按钮选文件。建议有「第N章」「Chapter N」「## 标题」之类的分章。" />
+          <div v-else class="h-40 flex items-center justify-center surface rounded text-sm text-muted">
+            📄 已加载 {{ manuscriptDraft._fileSize ? (manuscriptDraft._fileSize / 1024 / 1024).toFixed(1) : '?' }} MB 文本，
+            提交后将走后台异步导入
+          </div>
           <p class="text-xs text-muted mt-1.5">
             原文超过 10 万字时自动走后台异步导入，不阻塞页面。LLM 分析通常需要 30-120 秒。
           </p>
