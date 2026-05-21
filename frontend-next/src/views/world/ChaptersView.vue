@@ -304,11 +304,11 @@ const selectedManuChapter = computed(() => manuscript.value[selectedManuIndex.va
         <button class="px-3 h-8 transition-colors"
                 :class="mode === 'events' ? 'bg-surface' : 'hover:bg-surface/60 text-muted'"
                 @click="mode = 'events'">事件流</button>
-        <button class="px-3 h-8 transition-colors border-l border-border relative"
+        <button class="px-3 h-8 transition-colors"
                 :class="mode === 'manuscript' ? 'bg-surface' : 'hover:bg-surface/60 text-muted'"
                 :disabled="manuscript.length === 0 && !genRunning"
                 @click="manuscript.length > 0 && (mode = 'manuscript')">
-          手稿
+          📖 阅读
           <span v-if="manuscript.length > 0" class="ml-1 text-xs text-muted">{{ manuscript.length }}</span>
         </button>
       </div>

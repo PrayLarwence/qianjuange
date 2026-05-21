@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
-  worldsApi, simApi,
+  worldsApi, simApi, issuesApi,
   type WorldDetail, type WorldEntity, type WorldEvent,
   type DirectiveSuggestion, type StepResult, type JobToolCall,
 } from '@/services/api';
@@ -100,6 +100,17 @@ const lastResult = ref<StepResult | null>(null);
 const newEvents = ref<WorldEvent[]>([]);
 const runStartedTick = ref(0);
 const runError = ref('');
+const openIssues = ref(0);
+
+async function checkConsistency() {
+  try {
+    const r = await issuesApi.list(worldId.value, 'open');
+    openIssues.value = r.counts?.open || 0;
+    if (openIssues.value > 0) {
+      toast.info(`${openIssues.value} 个一致性问题待处理`);
+    }
+  } catch { /* noop */ }
+}
 
 function resetRunState() {
   liveToolCalls.value = [];
@@ -166,6 +177,7 @@ async function runSingle() {
     if (r.narration) liveNarration.value = r.narration;
     await refreshAfterRun(r);
     autoScrollStream();
+    checkConsistency();
     toast.success(`完成 1 步，当前 tick = ${world.value?.current_tick ?? '?'}`);
   } catch (e: any) {
     runError.value = e.message || String(e);
@@ -192,6 +204,7 @@ async function runAuto() {
     lastResult.value = (finalJob.result as StepResult) || null;
     if (finalJob.narration) liveNarration.value = finalJob.narration;
     await refreshAfterRun(lastResult.value || undefined);
+    checkConsistency();
     toast.success(`已完成 ${steps} 步`);
   } catch (e: any) {
     runError.value = e.message || String(e);
@@ -286,6 +299,11 @@ function toolArgPreview(c: JobToolCall): string {
       </span>
 
       <div class="flex-1" />
+
+      <router-link v-if="openIssues > 0" :to="`/worlds/${worldId}/review`"
+                   class="text-xs px-2 py-0.5 rounded bg-[#bb9856]/15 text-[#bb9856] hover:underline">
+        ⚠ {{ openIssues }} 个问题待处理
+      </router-link>
 
       <span v-if="running" class="text-xs text-muted inline-flex items-center gap-1.5">
         <span class="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />

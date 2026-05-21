@@ -143,6 +143,13 @@ function goSettings(section: string) {
         <div class="text-xs text-muted mt-0.5">{{ banner.sub }}</div>
       </div>
 
+      <!-- 风格提醒 -->
+      <div v-if="!world?.style_profile_id" class="mb-6 p-3 rounded-lg bg-sunken border border-border text-xs">
+        ⚡ 尚未绑定风格档案 —
+        <router-link :to="`/worlds/${worldId}/settings`" class="text-accent underline">去设置</router-link>
+        选择文风模板，让 AI 生成的文字更统一
+      </div>
+
       <!-- 世界统计 -->
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         <div class="stat-card">
