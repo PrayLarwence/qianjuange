@@ -187,10 +187,10 @@ async function doDelete() {
         <input ref="jsonFileInput" type="file"
                class="hidden" @change="onJsonPicked" />
         <button class="btn btn-ghost" :disabled="jsonImporting" @click="pickJson">
-          {{ jsonImporting ? '导入中…' : '⬆ 导入存档' }}
+          {{ jsonImporting ? '恢复中…' : '⬆ 恢复 JSON 备份' }}
         </button>
-        <button class="btn btn-ghost" @click="openManuscript">📖 从手稿建</button>
-        <button class="btn btn-accent" @click="openCreate">+ 新建世界</button>
+        <button class="btn btn-accent" @click="openManuscript">📖 从手稿建</button>
+        <button class="btn btn-ghost" @click="openCreate">+ 新建空白世界</button>
       </div>
     </header>
 
