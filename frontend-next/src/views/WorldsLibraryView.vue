@@ -106,8 +106,8 @@ async function onManuscriptFile(ev: Event) {
   const f = input.files?.[0];
   input.value = '';
   if (!f) return;
-  if (f.size > 5 * 1024 * 1024) {
-    toast.error('文件超过 5MB，先裁一下吧');
+  if (f.size > 50 * 1024 * 1024) {
+    toast.error('文件超过 50MB，请分割后再试');
     return;
   }
   try {
@@ -127,14 +127,20 @@ async function submitManuscript() {
   if (text.length < 50) { toast.error('手稿内容太短，至少 50 字'); return; }
   manuscriptBusy.value = true;
   try {
-    const r = await worldsApi.fromManuscript({
-      name, text, description: manuscriptDraft.value.description.trim() || undefined,
-    });
-    manuscriptResult.value = r;
-    if (r.warnings?.length) {
-      toast.error(r.warnings[0]);
+    if (text.length > 100_000) {
+      // 长文本用异步端点，避免超时
+      const r = await worldsApi.fromManuscriptAsync({
+        name, text, description: manuscriptDraft.value.description.trim() || undefined,
+      });
+      toast.info(`已启动后台导入（job: ${r.job_id.slice(0,12)}…），请稍后刷新世界列表`);
+      manuscriptOpen.value = false;
     } else {
-      toast.success('已从手稿建世界');
+      const r = await worldsApi.fromManuscript({
+        name, text, description: manuscriptDraft.value.description.trim() || undefined,
+      });
+      manuscriptResult.value = r;
+      if (r.warnings?.length) toast.error(r.warnings[0]);
+      else toast.success('已从手稿建世界');
     }
     await load();
   } catch (e: any) {
@@ -284,7 +290,7 @@ async function doDelete() {
                     class="input !h-auto py-2 font-serif leading-relaxed text-sm"
                     placeholder="把你的小说粘进来，或者点上面的按钮选文件。建议有「第N章」「Chapter N」「## 标题」之类的分章。" />
           <p class="text-xs text-muted mt-1.5">
-            原文超过 60,000 字时只截取前段进入分析。LLM 调用通常需要 30-90 秒。
+            原文超过 10 万字时自动走后台异步导入，不阻塞页面。LLM 分析通常需要 30-120 秒。
           </p>
         </div>
       </div>
