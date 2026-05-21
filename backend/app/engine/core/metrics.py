@@ -15,7 +15,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from ..models import LlmCallMetric
+from ...models import LlmCallMetric
 
 log = logging.getLogger(__name__)
 _lock = Lock()
@@ -34,7 +34,7 @@ def record_llm_call(
     error: str = "",
 ) -> None:
     try:
-        from ..models import SessionLocal  # lazy import to avoid circular
+        from ...models import SessionLocal  # lazy import to avoid circular
         metric = LlmCallMetric(
             id=f"llm_{uuid.uuid4().hex[:10]}",
             provider=provider,
