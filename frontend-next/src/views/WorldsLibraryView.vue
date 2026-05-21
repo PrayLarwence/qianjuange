@@ -272,7 +272,7 @@ async function doDelete() {
             <div class="flex items-center gap-2">
               <label class="btn btn-ghost text-xs cursor-pointer">
                 ⬆ 上传 .txt / .md
-                <input type="file" accept=".txt,.md,.markdown,text/plain"
+                <input type="file" accept=".txt,.md,.markdown,.text,text/plain,.html,.htm"
                        class="hidden" @change="onManuscriptFile" />
               </label>
               <span class="text-xs text-muted font-mono">
