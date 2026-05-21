@@ -13,18 +13,20 @@ const err = ref('');
 const worldId = computed(() => route.params.id as string);
 
 const items = [
-  { to: '',          label: '仪表盘',   icon: '◐' },
-  { to: 'chapters',  label: '章节',     icon: '✎' },
-  { to: 'graph',     label: '图谱',     icon: '◇' },
-  { to: 'timeline',  label: '时间轴',   icon: '─' },
-  { to: 'map',       label: '地图',     icon: '◰' },
-  { to: 'cast',      label: '角色',     icon: '☻' },
-  { to: 'lore',      label: '设定库',   icon: '✦' },
-  { to: 'sim',       label: '推演',     icon: '↻' },
-  { to: 'agent-run', label: 'Agent 编排', icon: '◈' },
-  { to: 'review',    label: '审阅',     icon: '⊙' },
-  { to: 'storyboard',label: '故事板',   icon: '▦' },
-  { to: 'settings',  label: '世界设置', icon: '⚙' },
+  // 创作
+  { to: '',          label: '仪表盘', icon: '◐', group: '创作' },
+  { to: 'sim',       label: '推演',   icon: '↻', group: '创作' },
+  { to: 'chapters',  label: '阅读',   icon: '📖', group: '创作' },
+  // 世界
+  { to: 'cast',      label: '角色',   icon: '☻', group: '世界' },
+  { to: 'lore',      label: '设定库', icon: '✦', group: '世界' },
+  { to: 'settings',  label: '设置',   icon: '⚙', group: '世界' },
+  // 分析
+  { to: 'review',    label: '审阅',   icon: '⊙', group: '分析' },
+  { to: 'graph',     label: '图谱',   icon: '◇', group: '分析' },
+  { to: 'timeline',  label: '时间轴', icon: '─', group: '分析' },
+  { to: 'map',       label: '地图',   icon: '◰', group: '分析' },
+  { to: 'storyboard',label: '故事板', icon: '▦', group: '分析' },
 ];
 
 async function load() {
@@ -46,6 +48,17 @@ function isActive(to: string) {
   if (!to) return route.path === base || route.path === base + '/';
   return route.path === target || route.path.startsWith(target + '/');
 }
+
+const groupedItems = computed(() => {
+  const groups: Record<string, typeof items> = {};
+  for (const it of items) {
+    const g = (it as any).group || '其他';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(it);
+  }
+  return groups;
+});
+
 </script>
 
 <template>
@@ -64,13 +77,18 @@ function isActive(to: string) {
       </div>
 
       <nav class="flex-1 overflow-y-auto px-2 py-2 space-y-0.5">
-        <RouterLink v-for="it in items" :key="it.to"
-                    :to="`/worlds/${worldId}${it.to ? '/' + it.to : ''}`"
-                    class="nav-item"
-                    :class="{ 'is-active': isActive(it.to) }">
-          <span class="w-4 text-center text-muted">{{ it.icon }}</span>
-          <span v-if="!ui.sidebarCollapsed">{{ it.label }}</span>
-        </RouterLink>
+        <template v-for="(groupItems, groupName) in groupedItems" :key="groupName">
+          <div v-if="!ui.sidebarCollapsed" class="px-2 pt-3 pb-1 text-[10px] uppercase tracking-widest text-muted/50">
+            {{ groupName }}
+          </div>
+          <RouterLink v-for="it in groupItems" :key="it.to"
+                      :to="`/worlds/${worldId}${it.to ? '/' + it.to : ''}`"
+                      class="nav-item"
+                      :class="{ 'is-active': isActive(it.to) }">
+            <span class="w-4 text-center text-muted">{{ it.icon }}</span>
+            <span v-if="!ui.sidebarCollapsed">{{ it.label }}</span>
+          </RouterLink>
+        </template>
       </nav>
 
       <div v-if="!ui.sidebarCollapsed" class="px-3 py-2 border-t border-border text-xs text-muted">
