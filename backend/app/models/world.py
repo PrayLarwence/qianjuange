@@ -157,6 +157,22 @@ class ChapterMarker(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class ChapterFeedback(Base):
+    """用户对一章的打分 + 评论。
+
+    路线 #8 MVP: 只收集；不接 critic prompt 闭环（等数据攒几周再启）。
+    score: -1 差 / 0 普通 / 1 好。每个 chapter_id 一行 (用户改分覆盖)。
+    """
+    __tablename__ = "chapter_feedback"
+    id = Column(String, primary_key=True)
+    chapter_id = Column(String, ForeignKey("chapter_markers.id"), nullable=False, unique=True, index=True)
+    branch_id = Column(String, ForeignKey("branches.id"), nullable=False, index=True)
+    score = Column(Integer, nullable=False)  # -1 / 0 / 1
+    comment = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class PlotThread(Base):
     __tablename__ = "plot_threads"
     id = Column(String, primary_key=True)

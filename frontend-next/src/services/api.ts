@@ -251,7 +251,39 @@ export const chaptersApi = {
     api.delete<{ ok: boolean }>(`/api/chapters/${chapterId}`),
   auto: (worldId: string, body: { target_count?: number; provider?: string }) =>
     api.post<{ chapters?: ChapterMarker[]; ok?: boolean }>(`/api/worlds/${worldId}/chapters/auto`, body),
+
+  upsertFeedback: (chapterId: string, score: -1 | 0 | 1, comment = '') =>
+    api.put<ChapterFeedback>(`/api/chapters/${chapterId}/feedback`, { score, comment }),
+  deleteFeedback: (chapterId: string) =>
+    api.delete<{ deleted: number }>(`/api/chapters/${chapterId}/feedback`),
+  listFeedback: (worldId: string) =>
+    api.get<ChapterFeedbackList>(`/api/worlds/${worldId}/chapter_feedback`),
 };
+
+export interface ChapterFeedback {
+  id: string;
+  chapter_id: string;
+  score: -1 | 0 | 1;
+  comment: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChapterFeedbackList {
+  items: Array<{
+    chapter_id: string;
+    tick: number;
+    title: string;
+    feedback: ChapterFeedback | null;
+  }>;
+  summary: {
+    total_chapters: number;
+    rated: number;
+    good: number;
+    neutral: number;
+    bad: number;
+  };
+}
 
 // ---------- 异步 Job ----------
 export interface JobToolCall {

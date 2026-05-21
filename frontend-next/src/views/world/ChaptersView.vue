@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router';
 import {
   chaptersApi, worldsApi, novelizeApi,
   type ChapterMarker, type TimelineEvent, type WorldDetail,
+  type ChapterFeedback,
 } from '@/services/api';
 import { useToastStore } from '@/stores/toast';
 import { useJob } from '@/composables/useJob';
@@ -21,6 +22,10 @@ const events = ref<TimelineEvent[]>([]);
 const loading = ref(true);
 const err = ref('');
 const selectedId = ref<string | null>(null);
+const feedbackByChapter = ref<Record<string, ChapterFeedback | null>>({});
+const feedbackBusy = ref(false);
+const commentDraft = ref<string>('');
+const commentEditing = ref(false);
 
 type Mode = 'events' | 'manuscript';
 const mode = ref<Mode>('events');
@@ -56,18 +61,21 @@ async function load() {
   loading.value = true;
   err.value = '';
   try {
-    const [snap, chs, tl] = await Promise.all([
+    const [snap, chs, tl, fb] = await Promise.all([
       worldsApi.get(worldId.value),
       chaptersApi.list(worldId.value),
       worldsApi.timeline(worldId.value),
+      chaptersApi.listFeedback(worldId.value).catch(() => null),
     ]);
     world.value = snap.world;
     chapters.value = chs;
     events.value = tl.events;
     if (!selectedId.value && chs.length > 0) selectedId.value = chs[0].id;
+    const map: Record<string, ChapterFeedback | null> = {};
+    if (fb) for (const it of fb.items) map[it.chapter_id] = it.feedback;
+    feedbackByChapter.value = map;
     loadManuscriptCache();
     if (manuscript.value.length > 0 && mode.value === 'events') {
-      // 有缓存就默认进手稿模式（用户上次留下的）
       mode.value = 'manuscript';
     }
   } catch (e: any) {
@@ -217,6 +225,64 @@ async function doDelete() {
   } finally {
     deleting.value = false;
   }
+}
+
+// --- 章节评分 (路线 #8 MVP: 只收集) ---
+const selectedFeedback = computed<ChapterFeedback | null>(() => {
+  const id = selectedId.value;
+  if (!id) return null;
+  return feedbackByChapter.value[id] || null;
+});
+
+watch(selectedId, () => {
+  commentEditing.value = false;
+  commentDraft.value = selectedFeedback.value?.comment || '';
+});
+
+async function rateChapter(score: -1 | 0 | 1) {
+  const id = selectedId.value;
+  if (!id || feedbackBusy.value) return;
+  feedbackBusy.value = true;
+  try {
+    const cur = feedbackByChapter.value[id];
+    if (cur && cur.score === score) {
+      // 再点一次 = 取消评分
+      await chaptersApi.deleteFeedback(id);
+      feedbackByChapter.value = { ...feedbackByChapter.value, [id]: null };
+    } else {
+      const fb = await chaptersApi.upsertFeedback(id, score, cur?.comment || '');
+      feedbackByChapter.value = { ...feedbackByChapter.value, [id]: fb };
+    }
+  } catch (e: any) {
+    toast.error(`评分失败：${e.message || e}`);
+  } finally {
+    feedbackBusy.value = false;
+  }
+}
+
+async function saveComment() {
+  const id = selectedId.value;
+  const fb = selectedFeedback.value;
+  if (!id || !fb || feedbackBusy.value) return;
+  feedbackBusy.value = true;
+  try {
+    const updated = await chaptersApi.upsertFeedback(id, fb.score, commentDraft.value);
+    feedbackByChapter.value = { ...feedbackByChapter.value, [id]: updated };
+    commentEditing.value = false;
+  } catch (e: any) {
+    toast.error(`保存评论失败：${e.message || e}`);
+  } finally {
+    feedbackBusy.value = false;
+  }
+}
+
+function startEditComment() {
+  commentDraft.value = selectedFeedback.value?.comment || '';
+  commentEditing.value = true;
+}
+
+function scoreLabel(score: number): string {
+  return score === 1 ? '好' : score === -1 ? '差' : '一般';
 }
 
 // --- 生成手稿 ---
@@ -371,7 +437,17 @@ const selectedManuChapter = computed(() => manuscript.value[selectedManuIndex.va
                     @click="selectedId = r.id">
               <span class="font-mono text-xs text-muted w-7 shrink-0">{{ i + 1 }}</span>
               <div class="flex-1 min-w-0">
-                <div class="font-serif text-sm truncate">{{ r.title }}</div>
+                <div class="font-serif text-sm truncate flex items-center gap-1.5">
+                  <span class="truncate">{{ r.title }}</span>
+                  <span v-if="feedbackByChapter[r.id]"
+                        class="shrink-0 inline-block w-1.5 h-1.5 rounded-full"
+                        :class="{
+                          'bg-emerald-500': feedbackByChapter[r.id]?.score === 1,
+                          'bg-muted': feedbackByChapter[r.id]?.score === 0,
+                          'bg-rose-500': feedbackByChapter[r.id]?.score === -1,
+                        }"
+                        :title="`已评：${scoreLabel(feedbackByChapter[r.id]!.score)}`"></span>
+                </div>
                 <div class="text-xs text-muted mt-0.5">
                   tick {{ r.tickLo }}<span v-if="isFinite(r.tickHi as number)">–{{ r.tickHi }}</span>
                   <span v-else>+</span>
@@ -418,6 +494,57 @@ const selectedManuChapter = computed(() => manuscript.value[selectedManuIndex.va
             <div class="flex items-center gap-2 mb-8 text-xs">
               <button class="btn btn-ghost" @click="openRename">重命名</button>
               <button class="btn btn-ghost hover:!text-red-500" @click="askDelete">删除标记</button>
+            </div>
+
+            <div class="surface rounded p-4 mb-8 space-y-2">
+              <div class="flex items-center gap-3 flex-wrap">
+                <span class="text-muted text-xs uppercase tracking-wider">读后评分</span>
+                <button class="btn btn-ghost text-sm"
+                        :class="{ '!bg-emerald-500/15 !text-emerald-600': selectedFeedback?.score === 1 }"
+                        :disabled="feedbackBusy"
+                        @click="rateChapter(1)">
+                  好
+                </button>
+                <button class="btn btn-ghost text-sm"
+                        :class="{ '!bg-muted/30 !text-text': selectedFeedback?.score === 0 }"
+                        :disabled="feedbackBusy"
+                        @click="rateChapter(0)">
+                  一般
+                </button>
+                <button class="btn btn-ghost text-sm"
+                        :class="{ '!bg-rose-500/15 !text-rose-600': selectedFeedback?.score === -1 }"
+                        :disabled="feedbackBusy"
+                        @click="rateChapter(-1)">
+                  差
+                </button>
+                <span v-if="selectedFeedback" class="text-xs text-muted">
+                  · 已评 {{ scoreLabel(selectedFeedback.score) }}（再点一次取消）
+                </span>
+                <span v-else class="text-xs text-muted">
+                  · 评分会按章存档，后续会用于自动调优 critic（路线 #8）
+                </span>
+              </div>
+
+              <div v-if="selectedFeedback" class="text-xs">
+                <div v-if="!commentEditing" class="flex items-start gap-2">
+                  <p class="flex-1 text-text/80 italic font-serif leading-relaxed whitespace-pre-wrap">
+                    {{ selectedFeedback.comment || '（无评论）' }}
+                  </p>
+                  <button class="btn btn-ghost text-xs shrink-0" @click="startEditComment">
+                    {{ selectedFeedback.comment ? '编辑评论' : '加评论' }}
+                  </button>
+                </div>
+                <div v-else class="space-y-2">
+                  <textarea v-model="commentDraft" rows="3"
+                            maxlength="2000"
+                            class="input !h-auto py-1.5 text-sm leading-relaxed"
+                            placeholder="（可选）这一章哪里好/不好？写给未来的自己看，最多 2000 字" />
+                  <div class="flex gap-2">
+                    <button class="btn btn-accent text-xs" :disabled="feedbackBusy" @click="saveComment">保存</button>
+                    <button class="btn btn-ghost text-xs" @click="commentEditing = false">取消</button>
+                  </div>
+                </div>
+              </div>
             </div>
 
             <div v-if="selectedRange.raw.note" class="text-muted font-serif text-prose mb-8 italic">

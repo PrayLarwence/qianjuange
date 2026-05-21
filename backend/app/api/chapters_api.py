@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..models import (
-    get_db, World, Branch, Entity, Event, NarrativeLog, ChapterMarker,
+    get_db, World, Branch, Entity, Event, NarrativeLog, ChapterMarker, ChapterFeedback,
 )
 from ..engine import build_state_snapshot
 from ..engine.tools import render_world_rules
@@ -402,4 +402,106 @@ def suggest_directives(world_id: str, payload: SuggestDirectivesRequest, db: Ses
             "rationale": (x.get("rationale") or "").strip(),
         })
     return {"suggestions": out, "raw_ok": bool(parsed)}
+
+
+# ============== chapter feedback (路线 #8 MVP) ==============
+
+ALLOWED_SCORES = {-1, 0, 1}
+
+
+def _serialize_feedback(fb: ChapterFeedback | None) -> dict | None:
+    if fb is None:
+        return None
+    return {
+        "id": fb.id,
+        "chapter_id": fb.chapter_id,
+        "score": fb.score,
+        "comment": fb.comment or "",
+        "created_at": fb.created_at.isoformat() if fb.created_at else "",
+        "updated_at": fb.updated_at.isoformat() if fb.updated_at else "",
+    }
+
+
+class ChapterFeedbackUpsertRequest(BaseModel):
+    score: int = Field(..., description="-1 差 / 0 普通 / 1 好")
+    comment: str = ""
+
+
+@router.put("/chapters/{chapter_id}/feedback")
+def upsert_chapter_feedback(
+    chapter_id: str,
+    payload: ChapterFeedbackUpsertRequest,
+    db: Session = Depends(get_db),
+):
+    if payload.score not in ALLOWED_SCORES:
+        raise HTTPException(400, "score 必须是 -1 / 0 / 1")
+    chapter = db.query(ChapterMarker).filter_by(id=chapter_id).first()
+    if not chapter:
+        raise HTTPException(404, "chapter not found")
+    fb = db.query(ChapterFeedback).filter_by(chapter_id=chapter_id).first()
+    if fb is None:
+        fb = ChapterFeedback(
+            id=_new_id("fb"),
+            chapter_id=chapter_id,
+            branch_id=chapter.branch_id,
+            score=payload.score,
+            comment=(payload.comment or "")[:2000],
+        )
+        db.add(fb)
+    else:
+        fb.score = payload.score
+        fb.comment = (payload.comment or "")[:2000]
+    db.commit()
+    db.refresh(fb)
+    return _serialize_feedback(fb)
+
+
+@router.delete("/chapters/{chapter_id}/feedback")
+def delete_chapter_feedback(chapter_id: str, db: Session = Depends(get_db)):
+    fb = db.query(ChapterFeedback).filter_by(chapter_id=chapter_id).first()
+    if fb is None:
+        return {"deleted": 0}
+    db.delete(fb)
+    db.commit()
+    return {"deleted": 1}
+
+
+@router.get("/worlds/{world_id}/chapter_feedback")
+def list_chapter_feedback(world_id: str, db: Session = Depends(get_db)):
+    """列出该世界 active branch 上所有章节的反馈（含尚未打分的章节，feedback=None）。"""
+    world = db.query(World).filter_by(id=world_id).first()
+    if not world:
+        raise HTTPException(404, "world not found")
+    chapters = (
+        db.query(ChapterMarker)
+        .filter_by(branch_id=world.active_branch_id)
+        .order_by(ChapterMarker.tick).all()
+    )
+    chapter_ids = [c.id for c in chapters]
+    fb_by_chapter: dict[str, ChapterFeedback] = {}
+    if chapter_ids:
+        for fb in db.query(ChapterFeedback).filter(ChapterFeedback.chapter_id.in_(chapter_ids)).all():
+            fb_by_chapter[fb.chapter_id] = fb
+    items = []
+    score_counts = {-1: 0, 0: 0, 1: 0}
+    for c in chapters:
+        fb = fb_by_chapter.get(c.id)
+        if fb is not None:
+            score_counts[fb.score] = score_counts.get(fb.score, 0) + 1
+        items.append({
+            "chapter_id": c.id,
+            "tick": c.tick,
+            "title": c.title or "",
+            "feedback": _serialize_feedback(fb),
+        })
+    return {
+        "items": items,
+        "summary": {
+            "total_chapters": len(chapters),
+            "rated": sum(score_counts.values()),
+            "good": score_counts[1],
+            "neutral": score_counts[0],
+            "bad": score_counts[-1],
+        },
+    }
 
