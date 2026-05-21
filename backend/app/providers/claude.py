@@ -3,16 +3,23 @@ import json
 import os
 from typing import Any
 import httpx
-from .base import LLMProvider, LLMResponse, Message, ToolCall, ToolSpec
+from .base import BaseProvider, LLMResponse, Message, ToolCall, ToolSpec
 
 
-class ClaudeProvider:
+class ClaudeProvider(BaseProvider):
     name = "claude"
+    label = "Claude (Anthropic)"
+    default_model = "claude-opus-4-7"
+    default_models = ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]
+    default_base_url = "https://api.anthropic.com"
+    env_api_key = "ANTHROPIC_API_KEY"
+    env_model = "CLAUDE_MODEL"
+    homepage = "https://console.anthropic.com"
 
-    def __init__(self, api_key: str | None = None, model: str = "claude-opus-4-7", base_url: str = "https://api.anthropic.com"):
-        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
-        self.model = model
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, api_key: str | None = None, model: str | None = None, base_url: str | None = None):
+        self.api_key = api_key or os.getenv(self.env_api_key or "", "")
+        self.model = model or self.default_model
+        self.base_url = (base_url or self.default_base_url).rstrip("/")
 
     def chat(self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int = 2048, temperature: float = 0.7, timeout: float = 120.0) -> LLMResponse:
         payload: dict[str, Any] = {

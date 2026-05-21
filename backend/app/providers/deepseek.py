@@ -1,14 +1,13 @@
 from __future__ import annotations
-import os
-from .openai_provider import OpenAIProvider
+from .openai_compat import OpenAICompatibleProvider
 
 
-class DeepSeekProvider(OpenAIProvider):
+class DeepSeekProvider(OpenAICompatibleProvider):
     name = "deepseek"
-
-    def __init__(self, api_key: str | None = None, model: str = "deepseek-chat", base_url: str = "https://api.deepseek.com/v1"):
-        super().__init__(
-            api_key=api_key or os.getenv("DEEPSEEK_API_KEY", ""),
-            model=model,
-            base_url=base_url,
-        )
+    label = "DeepSeek"
+    default_model = "deepseek-chat"
+    default_models = ["deepseek-chat", "deepseek-reasoner"]
+    default_base_url = "https://api.deepseek.com/v1"
+    env_api_key = "DEEPSEEK_API_KEY"
+    env_model = "DEEPSEEK_MODEL"
+    homepage = "https://platform.deepseek.com"

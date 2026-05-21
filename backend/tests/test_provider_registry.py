@@ -1,0 +1,175 @@
+"""Provider registry 契约测试。
+
+验证基类抽出 + 自动注册机制：
+- 4 个现有 provider 都注册到位
+- 元信息字段齐全（label / default_model / default_models / homepage）
+- OpenAI 兼容基类自身不被注册（_abstract）
+- 新增子类能自动加入
+"""
+from __future__ import annotations
+
+import pytest
+
+
+def test_all_four_providers_registered():
+    from app.providers import PROVIDER_CLASSES
+    assert set(PROVIDER_CLASSES.keys()) == {"claude", "openai", "deepseek", "ollama"}
+
+
+def test_provider_meta_complete():
+    from app.providers import registry
+    meta = registry.provider_meta()
+    for name in ("claude", "openai", "deepseek", "ollama"):
+        m = meta[name]
+        assert m["label"], f"{name} missing label"
+        assert isinstance(m["default_models"], list) and m["default_models"], f"{name} missing default_models"
+        assert "needs_api_key" in m
+        assert "supports_native_tools" in m
+        assert m["homepage"].startswith("http")
+
+
+def test_ollama_does_not_need_api_key():
+    from app.providers import registry
+    assert registry.provider_meta()["ollama"]["needs_api_key"] is False
+    assert registry.provider_meta()["ollama"]["supports_native_tools"] is False
+
+
+def test_provider_defaults_match_class_attrs():
+    from app.providers import registry, PROVIDER_CLASSES
+    defaults = registry.provider_defaults()
+    for name, cls in PROVIDER_CLASSES.items():
+        assert defaults[name]["model"] == cls.default_model
+        assert defaults[name]["base_url"] == cls.default_base_url
+        assert defaults[name]["api_key"] == ""
+
+
+def test_env_keys_match_class_attrs():
+    from app.providers import registry, PROVIDER_CLASSES
+    env_map = registry.env_keys()
+    for name, cls in PROVIDER_CLASSES.items():
+        assert env_map[name] == (cls.env_api_key, cls.env_model, cls.env_base_url)
+
+
+def test_openai_compat_base_not_registered():
+    """OpenAICompatibleProvider 是抽象基类，不应自己被注册。"""
+    from app.providers import PROVIDER_CLASSES
+    from app.providers.openai_compat import OpenAICompatibleProvider
+    # 基类不在注册表里
+    assert OpenAICompatibleProvider not in PROVIDER_CLASSES.values()
+    # 但具体子类在
+    assert PROVIDER_CLASSES["openai"].__bases__[0] is OpenAICompatibleProvider
+    assert PROVIDER_CLASSES["deepseek"].__bases__[0] is OpenAICompatibleProvider
+
+
+def test_subclass_auto_registers_and_unregisters():
+    """新写一个子类应当自动出现在 PROVIDER_CLASSES，测完后清理。"""
+    from app.providers import PROVIDER_CLASSES, registry
+    from app.providers.openai_compat import OpenAICompatibleProvider
+
+    class FakeKimi(OpenAICompatibleProvider):
+        name = "fake_kimi_test"
+        label = "Kimi (test)"
+        default_model = "moonshot-v1-8k"
+        default_base_url = "https://api.moonshot.cn/v1"
+        env_api_key = "MOONSHOT_API_KEY"
+        homepage = "https://platform.moonshot.cn"
+
+    try:
+        assert "fake_kimi_test" in PROVIDER_CLASSES
+        meta = registry.provider_meta()["fake_kimi_test"]
+        assert meta["label"] == "Kimi (test)"
+        assert meta["needs_api_key"] is True
+        assert meta["supports_native_tools"] is True
+        # default_models 没设也不该崩
+        assert meta["default_models"] == []
+    finally:
+        PROVIDER_CLASSES.pop("fake_kimi_test", None)
+
+
+def test_openai_provider_uses_compat_chat(monkeypatch):
+    """OpenAIProvider 现在继承自 OpenAICompatibleProvider，调用 chat 应走兼容路径。"""
+    from app.providers import OpenAIProvider, Message
+    from app.providers.openai_compat import OpenAICompatibleProvider
+
+    captured = {}
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": "hi", "tool_calls": []}}], "usage": {"total_tokens": 5}}
+
+    class FakeClient:
+        def __init__(self, *a, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def post(self, url, json, headers):
+            captured["url"] = url
+            captured["model"] = json["model"]
+            captured["auth"] = headers.get("Authorization", "")
+            return FakeResp()
+
+    import app.providers.openai_compat as oc
+    monkeypatch.setattr(oc, "httpx", type("M", (), {"Client": FakeClient}))
+
+    p = OpenAIProvider(api_key="sk-test", model="gpt-4o-mini")
+    resp = p.chat(system="s", messages=[Message(role="user", content="x")], tools=[])
+    assert resp.text == "hi"
+    assert captured["url"].endswith("/chat/completions")
+    assert captured["model"] == "gpt-4o-mini"
+    assert captured["auth"] == "Bearer sk-test"
+    # 确认是基类提供的实现
+    assert OpenAIProvider.chat is OpenAICompatibleProvider.chat
+
+
+def test_deepseek_inherits_compat_implementation():
+    from app.providers import DeepSeekProvider
+    from app.providers.openai_compat import OpenAICompatibleProvider
+    assert DeepSeekProvider.chat is OpenAICompatibleProvider.chat
+    p = DeepSeekProvider()
+    assert p.base_url == "https://api.deepseek.com/v1"
+    assert p.model == "deepseek-chat"
+
+
+def test_get_provider_skips_api_key_when_not_needed(monkeypatch):
+    """ollama 不该收到 api_key 即使 config 里塞了。"""
+    from app.providers import get_provider, registry, PROVIDER_CLASSES
+    captured = {}
+
+    class FakeOllama:
+        name = "ollama"
+        needs_api_key = False
+        def __init__(self, **kw):
+            captured.update(kw)
+
+    monkeypatch.setitem(PROVIDER_CLASSES, "ollama", FakeOllama)
+    monkeypatch.setattr("app.providers.load_config",
+                        lambda: {"active": "ollama",
+                                 "providers": {"ollama": {"api_key": "should-be-dropped",
+                                                          "model": "llama3.1",
+                                                          "base_url": "http://localhost:11434"}}})
+
+    get_provider("ollama")
+    assert "api_key" not in captured
+    assert captured.get("model") == "llama3.1"
+    assert captured.get("base_url") == "http://localhost:11434"
+
+
+def test_load_config_picks_up_newly_registered_provider():
+    """注册一个新 provider，load_config 应该立刻给它返回默认条目。"""
+    from app.providers import load_config, PROVIDER_CLASSES
+    from app.providers.openai_compat import OpenAICompatibleProvider
+
+    class FakeProvX(OpenAICompatibleProvider):
+        name = "fake_provx_test"
+        label = "ProvX"
+        default_model = "x-default"
+        default_base_url = "https://provx.example.com/v1"
+        env_api_key = "PROVX_API_KEY"
+
+    try:
+        cfg = load_config()
+        assert "fake_provx_test" in cfg["providers"]
+        assert cfg["providers"]["fake_provx_test"]["model"] == "x-default"
+        assert cfg["providers"]["fake_provx_test"]["base_url"] == "https://provx.example.com/v1"
+    finally:
+        PROVIDER_CLASSES.pop("fake_provx_test", None)

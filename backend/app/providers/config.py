@@ -5,49 +5,30 @@ from pathlib import Path
 from typing import Any
 from threading import RLock
 
+from . import registry
+
+# 触发 provider 模块导入 → __init_subclass__ 注册
+registry.import_all_providers()
+
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / "llm_config.json"
 
 _lock = RLock()
 
-DEFAULTS: dict[str, Any] = {
-    "active": "claude",
-    "providers": {
-        "claude": {
-            "api_key": "",
-            "model": "claude-opus-4-7",
-            "base_url": "https://api.anthropic.com",
-        },
-        "openai": {
-            "api_key": "",
-            "model": "gpt-4o-mini",
-            "base_url": "https://api.openai.com/v1",
-        },
-        "deepseek": {
-            "api_key": "",
-            "model": "deepseek-chat",
-            "base_url": "https://api.deepseek.com/v1",
-        },
-        "ollama": {
-            "api_key": "",
-            "model": "llama3.1",
-            "base_url": "http://localhost:11434",
-        },
-    },
-}
 
-ENV_KEYS = {
-    "claude": ("ANTHROPIC_API_KEY", "CLAUDE_MODEL", None),
-    "openai": ("OPENAI_API_KEY", "OPENAI_MODEL", None),
-    "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_MODEL", None),
-    "ollama": (None, "OLLAMA_MODEL", "OLLAMA_BASE_URL"),
-}
+def _defaults() -> dict[str, Any]:
+    """每次调用现算，保证新注册的 provider 立刻生效。"""
+    return {
+        "active": "claude" if "claude" in registry.PROVIDER_CLASSES else next(iter(registry.PROVIDER_CLASSES), ""),
+        "providers": registry.provider_defaults(),
+    }
 
 
 def _merge_env(cfg: dict[str, Any]) -> dict[str, Any]:
-    for name, (key_env, model_env, url_env) in ENV_KEYS.items():
-        p = cfg["providers"].setdefault(name, dict(DEFAULTS["providers"][name]))
+    for name, (key_env, model_env, url_env) in registry.env_keys().items():
+        defaults = registry.provider_defaults().get(name, {})
+        p = cfg["providers"].setdefault(name, dict(defaults))
         if not p.get("api_key") and key_env and os.getenv(key_env):
             p["api_key"] = os.getenv(key_env, "")
         if model_env and os.getenv(model_env):
@@ -62,19 +43,21 @@ def _merge_env(cfg: dict[str, Any]) -> dict[str, Any]:
 
 def load_config() -> dict[str, Any]:
     with _lock:
+        defaults = _defaults()
         if CONFIG_PATH.exists():
             try:
                 cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
-                cfg = json.loads(json.dumps(DEFAULTS))
+                cfg = json.loads(json.dumps(defaults))
         else:
-            cfg = json.loads(json.dumps(DEFAULTS))
-        cfg.setdefault("active", DEFAULTS["active"])
+            cfg = json.loads(json.dumps(defaults))
+        cfg.setdefault("active", defaults["active"])
         cfg.setdefault("providers", {})
-        for k, v in DEFAULTS["providers"].items():
+        # 给所有已注册 provider 兜底字段
+        for k, v in defaults["providers"].items():
             cfg["providers"].setdefault(k, dict(v))
-            for field, default in v.items():
-                cfg["providers"][k].setdefault(field, default)
+            for fld, default in v.items():
+                cfg["providers"][k].setdefault(fld, default)
         return _merge_env(cfg)
 
 

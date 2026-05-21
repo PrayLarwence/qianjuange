@@ -4,7 +4,7 @@ import os
 import re
 from typing import Any
 import httpx
-from .base import LLMResponse, Message, ToolCall, ToolSpec
+from .base import BaseProvider, LLMResponse, Message, ToolCall, ToolSpec
 
 
 _TOOL_INSTR = (
@@ -17,12 +17,23 @@ _TOOL_INSTR = (
 _TOOL_BLOCK_RE = re.compile(r"```tool\s*(\{.*?\})\s*```", re.DOTALL)
 
 
-class OllamaProvider:
+class OllamaProvider(BaseProvider):
     name = "ollama"
+    label = "Ollama (本地)"
+    default_model = "llama3.1"
+    default_models = ["llama3.1", "qwen2.5", "mistral", "deepseek-r1"]
+    default_base_url = "http://localhost:11434"
+    env_model = "OLLAMA_MODEL"
+    env_base_url = "OLLAMA_BASE_URL"
+    needs_api_key = False
+    supports_native_tools = False
+    homepage = "https://ollama.com"
 
-    def __init__(self, model: str = "llama3.1", base_url: str | None = None):
-        self.model = model
-        self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")).rstrip("/")
+    def __init__(self, model: str | None = None, base_url: str | None = None, **_kw: Any):
+        # **_kw 吸收 api_key（即使误传也不报错，对齐其他 provider 签名）
+        self.model = model or self.default_model
+        env_url = os.getenv(self.env_base_url or "")
+        self.base_url = (base_url or env_url or self.default_base_url).rstrip("/")
 
     def chat(self, system: str, messages: list[Message], tools: list[ToolSpec], max_tokens: int = 2048, temperature: float = 0.7, timeout: float = 120.0) -> LLMResponse:
         sys_full = system

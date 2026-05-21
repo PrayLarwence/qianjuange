@@ -17,43 +17,16 @@ from pydantic import BaseModel
 from ..providers import (
     get_provider, load_config, save_config, mask, PROVIDER_CLASSES, Message,
 )
+from ..providers import registry
 
 log = logging.getLogger(__name__)
 router = APIRouter()
 
 
-PROVIDER_META = {
-    "claude": {
-        "label": "Claude (Anthropic)",
-        "needs_api_key": True,
-        "default_models": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
-        "homepage": "https://console.anthropic.com",
-    },
-    "openai": {
-        "label": "OpenAI",
-        "needs_api_key": True,
-        "default_models": ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"],
-        "homepage": "https://platform.openai.com",
-    },
-    "deepseek": {
-        "label": "DeepSeek",
-        "needs_api_key": True,
-        "default_models": ["deepseek-chat", "deepseek-reasoner"],
-        "homepage": "https://platform.deepseek.com",
-    },
-    "ollama": {
-        "label": "Ollama (本地)",
-        "needs_api_key": False,
-        "default_models": ["llama3.1", "qwen2.5", "mistral", "deepseek-r1"],
-        "homepage": "https://ollama.com",
-    },
-}
-
-
 @router.get("/llm_config")
 def get_llm_config():
     cfg = load_config()
-    return {"config": mask(cfg), "meta": PROVIDER_META}
+    return {"config": mask(cfg), "meta": registry.provider_meta()}
 
 
 class LLMConfigUpdate(BaseModel):
