@@ -181,7 +181,7 @@ def create_world_from_manuscript_async(payload: ManuscriptIngest, db: Session = 
                 return
 
             if not result.chunks:
-                job.status = "failed"
+                job.status = "error"
                 job.progress_message = "; ".join(result.warnings) or "无法解析手稿"
                 return
 
@@ -255,7 +255,7 @@ def create_world_from_manuscript_async(payload: ManuscriptIngest, db: Session = 
             }
         except Exception as e:
             log.exception("V1 async ingest failed")
-            job.status = "failed"
+            job.status = "error"
             job.progress_message = str(e)[:500]
         finally:
             local_db.close()

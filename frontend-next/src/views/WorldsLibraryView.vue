@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { worldsApi, type WorldSummary } from '@/services/api';
+import { worldsApi, jobsApi, type WorldSummary, type JobStatus } from '@/services/api';
 import { useToastStore } from '@/stores/toast';
 import Dialog from '@/components/Dialog.vue';
 import ConfirmDialog from '@/components/ConfirmDialog.vue';
@@ -25,6 +25,10 @@ async function load() {
   }
 }
 onMounted(load);
+
+onBeforeUnmount(() => {
+  if (importJobTimer) clearInterval(importJobTimer);
+});
 
 // 新建
 const createOpen = ref(false);
@@ -94,6 +98,37 @@ const manuscriptResult = ref<{
   stats: { chunks: number; outline: number; cast: number; locations: number; factions: number };
   warnings: string[];
 } | null>(null);
+// 异步导入进度
+const importJobId = ref<string | null>(null);
+const importJobStatus = ref<string>('');
+const importJobMsg = ref<string>('');
+let importJobTimer: number | null = null;
+
+function watchImportJob(jobId: string) {
+  importJobId.value = jobId;
+  importJobStatus.value = 'running';
+  importJobMsg.value = '正在启动…';
+  if (importJobTimer) clearInterval(importJobTimer);
+  importJobTimer = window.setInterval(async () => {
+    try {
+      const j = await jobsApi.get(jobId);
+      importJobStatus.value = j.status;
+      importJobMsg.value = j.progress_message || '';
+      if (j.status === 'completed') {
+        clearInterval(importJobTimer!);
+        importJobTimer = null;
+        toast.success(`导入完成！${j.result?.stats?.chapters || j.result?.stats?.chunks || '?'} 章`);
+        importJobId.value = null;
+        await load();
+      } else if (j.status === 'error' || (j as any).status === 'failed') {
+        clearInterval(importJobTimer!);
+        importJobTimer = null;
+        toast.error(`导入失败：${j.progress_message || j.error || '未知错误'}`);
+        importJobId.value = null;
+      }
+    } catch { /* polling error, ignore */ }
+  }, 2000);
+}
 const manuscriptCharCount = computed(() => {
   if (manuscriptDraft.value._fileSize) return `${(manuscriptDraft.value._fileSize / 1024 / 1024).toFixed(1)} MB`;
   return `${manuscriptDraft.value.text.length.toLocaleString()} 字`;
@@ -139,7 +174,7 @@ async function submitManuscript() {
       const r = await worldsApi.fromManuscriptAsync({
         name, text, description: manuscriptDraft.value.description.trim() || undefined,
       });
-      toast.info(`已启动后台导入（job: ${r.job_id.slice(0,12)}…），稍后刷新世界列表`);
+      watchImportJob(r.job_id);
       manuscriptOpen.value = false;
     } else {
       const r = await worldsApi.fromManuscript({
@@ -215,6 +250,15 @@ async function doDelete() {
       <div class="flex items-center justify-center gap-2">
         <button class="btn btn-accent" @click="openCreate">+ 新建第一个世界</button>
         <button class="btn btn-ghost" @click="openManuscript">📖 从手稿建</button>
+      </div>
+    </div>
+
+    <!-- 异步导入进度条 -->
+    <div v-if="importJobId" class="mb-4 p-3 rounded border border-accent/30 bg-accent/5">
+      <div class="flex items-center gap-2 text-sm">
+        <span class="inline-block w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin"></span>
+        <span class="font-medium">后台导入中</span>
+        <span class="text-muted text-xs ml-auto">{{ importJobMsg }}</span>
       </div>
     </div>
 
