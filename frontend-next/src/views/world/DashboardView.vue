@@ -11,6 +11,7 @@ const worldId = computed(() => route.params.id as string);
 const world = ref<WorldDetail | null>(null);
 const snapshot = ref<any>(null);
 const metrics = ref<any>(null);
+const manuscript = ref<any>(null);
 const loading = ref(true);
 const err = ref('');
 
@@ -18,13 +19,15 @@ async function load() {
   loading.value = true;
   err.value = '';
   try {
-    const [snap, m] = await Promise.all([
+    const [snap, m, met] = await Promise.all([
       worldsApi.get(worldId.value),
+      worldsApi.manuscriptState(worldId.value).catch(() => null),
       llmApi.metrics({ hours: 24 }).catch(() => null),
     ]);
     snapshot.value = snap;
     world.value = snap.world;
-    metrics.value = m;
+    manuscript.value = m;
+    metrics.value = met;
   } catch (e: any) {
     err.value = e.message || String(e);
   } finally {
@@ -32,6 +35,15 @@ async function load() {
   }
 }
 onMounted(load);
+
+const banner = computed(() => {
+  const m = manuscript.value;
+  if (!m || !m.has_manuscript) return null;
+  if (m.draft_event_count > 0) {
+    return { kind: 'review', title: `${m.draft_event_count} 个事件草稿待审阅`, sub: '点击前往设置 → 手稿抽取审阅' };
+  }
+  return { kind: 'extract', title: `${m.chapter_count} 章已切分`, sub: '点击前往设置 → 抽取事件' };
+});
 
 const entities = computed(() => {
   const all = snapshot.value?.entities || [];
@@ -70,6 +82,14 @@ function fmt(n: number | undefined): string {
       <div class="mb-8">
         <h1 class="font-serif text-3xl mb-1">{{ world.name }}</h1>
         <p class="text-muted text-sm">{{ world.description || '无描述' }}</p>
+      </div>
+
+      <!-- 手稿横幅 -->
+      <div v-if="banner" class="mb-6 p-4 rounded-lg border cursor-pointer"
+           :class="banner.kind === 'review' ? 'bg-accent/10 border-accent/30' : 'bg-sunken border-border'"
+           @click="$router.push(`/worlds/${worldId}/settings`)">
+        <div class="text-sm font-medium">{{ banner.title }}</div>
+        <div class="text-xs text-muted mt-0.5">{{ banner.sub }}</div>
       </div>
 
       <!-- 世界统计 -->
