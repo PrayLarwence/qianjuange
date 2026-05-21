@@ -98,7 +98,7 @@ const groupedItems = computed(() => {
 
     <!-- 主画布 -->
     <section class="flex-1 min-w-0 overflow-y-auto">
-      <RouterView v-if="!err" />
+      <RouterView v-if="!err" :key="worldId" />
       <div v-else class="p-10 text-muted">
         <p class="font-serif text-xl mb-2">未能载入世界</p>
         <p class="text-sm">{{ err }}</p>

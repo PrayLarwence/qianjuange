@@ -119,7 +119,13 @@ async function streamPollJob(jobId: string): Promise<any> {
   return fetch(`/api/jobs/${jobId}`).then(r => r.json());
 }
 
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
 function resetRunState() {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
   orchestrTraces.value = [];
   liveToolCalls.value = [];
   liveNarration.value = '';
@@ -184,7 +190,7 @@ async function runSingle() {
         directive: directive.value.trim() || undefined,
       });
       let lastSeq = 0;
-      const pollTimer = setInterval(async () => {
+      pollTimer = setInterval(async () => {
         try {
           const t = await agentPipelineApi.traces(job_id, lastSeq);
           if (t.traces.length) {
@@ -197,7 +203,10 @@ async function runSingle() {
         try {
           const j = await streamPollJob(job_id);
           if (j.status === 'completed' || j.status === 'error' || j.status === 'cancelled') {
-            clearInterval(pollTimer);
+            if (pollTimer !== null) {
+              clearInterval(pollTimer);
+              pollTimer = null;
+            }
             if (j.status === 'completed') {
               lastResult.value = j.result as StepResult || null;
               if ((j.result as any)?.narration) liveNarration.value = (j.result as any).narration;
@@ -314,7 +323,13 @@ async function cancelRun() {
   }
 }
 
-onBeforeUnmount(() => { stream.reset(); });
+onBeforeUnmount(() => {
+  stream.reset();
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+});
 
 const canRun = computed(() => !loading.value && !running.value && !reachedMax.value);
 
