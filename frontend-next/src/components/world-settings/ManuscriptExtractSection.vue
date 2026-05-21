@@ -234,7 +234,7 @@ onUnmounted(stopPolling);
 </script>
 
 <template>
-  <section class="mb-12">
+  <section id="section-manuscript" class="mb-12">
     <header class="flex items-baseline justify-between mb-3">
       <h2 class="text-muted text-xs uppercase tracking-wider">手稿事件抽取</h2>
       <span class="text-xs text-muted">从导入的小说原稿里抽事件，审阅后写入时间轴</span>

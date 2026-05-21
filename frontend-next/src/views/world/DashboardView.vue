@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { worldsApi, llmApi, type WorldDetail } from '@/services/api';
 import { useToastStore } from '@/stores/toast';
 
 const route = useRoute();
+const router = useRouter();
 const toast = useToastStore();
 const worldId = computed(() => route.params.id as string);
 
@@ -67,9 +68,28 @@ const chunkCount = computed(() => {
   return (w?.manuscript_chunks || []).length;
 });
 
+const hasEvents = computed(() => eventCount.value > 0);
+const hasManuscript = computed(() => manuscript.value?.has_manuscript);
+const hasDrafts = computed(() => (manuscript.value?.draft_event_count || 0) > 0);
+const workflowStep = computed(() => {
+  if (!hasManuscript.value) return 1;
+  if (!hasDrafts.value) return 2;
+  if (!hasEvents.value) return 3;
+  return 4;
+});
+
 function fmt(n: number | undefined): string {
   if (n === undefined || n === null) return '—';
   return n.toLocaleString();
+}
+
+function goSettings(section: string) {
+  router.push(`/worlds/${worldId.value}/settings`);
+  // 延迟滚动到 manuscript section
+  setTimeout(() => {
+    const el = document.querySelector('#section-manuscript');
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
+  }, 300);
 }
 </script>
 
@@ -84,10 +104,41 @@ function fmt(n: number | undefined): string {
         <p class="text-muted text-sm">{{ world.description || '无描述' }}</p>
       </div>
 
+      <!-- 引导流程 -->
+      <div v-if="workflowStep < 4" class="mb-6 p-4 rounded-lg bg-accent/5 border border-accent/20">
+        <div class="text-sm font-medium mb-2">从这里开始</div>
+        <div class="grid grid-cols-3 gap-2 text-xs">
+          <div class="text-center" :class="workflowStep <= 1 ? 'text-accent font-medium' : 'text-muted'">
+            <div class="text-lg mb-0.5">📖</div>
+            <div>导入手稿</div>
+            <div v-if="workflowStep === 1" class="mt-1">
+              <router-link to="/worlds" class="text-accent underline">去导入</router-link>
+            </div>
+            <div v-else class="text-green-600">✓</div>
+          </div>
+          <div class="text-center" :class="workflowStep === 2 ? 'text-accent font-medium' : (workflowStep > 2 ? 'text-muted' : 'text-muted/50')">
+            <div class="text-lg mb-0.5">🔍</div>
+            <div>抽取事件</div>
+            <div v-if="hasManuscript && !hasDrafts" class="mt-1">
+              <span class="text-accent underline cursor-pointer" @click="goSettings('manuscript')">去抽取</span>
+            </div>
+            <div v-else-if="workflowStep > 2" class="text-green-600">✓</div>
+          </div>
+          <div class="text-center" :class="workflowStep === 3 ? 'text-accent font-medium' : (workflowStep > 3 ? 'text-muted' : 'text-muted/30')">
+            <div class="text-lg mb-0.5">✍️</div>
+            <div>审阅并推演</div>
+            <div v-if="hasDrafts && !hasEvents" class="mt-1">
+              <router-link :to="`/worlds/${worldId}/sim`" class="text-accent underline">去推演</router-link>
+            </div>
+            <div v-else-if="workflowStep > 3" class="text-green-600">✓</div>
+          </div>
+        </div>
+      </div>
+
       <!-- 手稿横幅 -->
       <div v-if="banner" class="mb-6 p-4 rounded-lg border cursor-pointer"
            :class="banner.kind === 'review' ? 'bg-accent/10 border-accent/30' : 'bg-sunken border-border'"
-           @click="$router.push(`/worlds/${worldId}/settings`)">
+           @click="goSettings('manuscript')">
         <div class="text-sm font-medium">{{ banner.title }}</div>
         <div class="text-xs text-muted mt-0.5">{{ banner.sub }}</div>
       </div>
