@@ -228,3 +228,16 @@ def get_agent_trace_full(job_id: str, trace_id: str, db: Session = Depends(get_d
         "full_prompt": row.full_prompt,
         "full_response": row.full_response,
     }
+
+
+@router.get("/worlds/{world_id}/pipeline_metrics")
+def get_pipeline_metrics(world_id: str, hours: int = 168, db: Session = Depends(get_db)):
+    """聚合该世界过去 N 小时（默认 7 天）的 orchestrated step 指标。
+
+    用于 DashboardView 的 Pipeline 卡片：critic 通过率、forced_accept 比例、各 critic 表现。
+    """
+    world = db.query(World).filter_by(id=world_id).first()
+    if not world:
+        raise HTTPException(404, "world not found")
+    from ..engine.agents.orchestrator import query_pipeline_metrics
+    return query_pipeline_metrics(db, world_id, hours=hours)

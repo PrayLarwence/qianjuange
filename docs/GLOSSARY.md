@@ -79,7 +79,7 @@ LLM 生成的散文。**多 agent 流程会产生多版本同 tick 的记录**�
 用户上传的现有小说原文。存在 `world.manuscript_chunks` JSON 里：`[{"title": "第一章", "text": "..."}]`。
 
 ### V1 = "建世界时一次性抽骨架"
-- 文件：`backend/app/engine/manuscript_ingest.py`
+- 文件：`backend/app/engine/manuscript/manuscript_ingest.py`
 - 触发：前端 `WorldsLibraryView` "📖 从手稿建" → `worlds_api.py` `/worlds/from_manuscript`
 - **同步执行**（endpoint 直接跑 LLM 等返回）
 - LLM 输出：cast / locations / factions / outline / setting
@@ -88,7 +88,7 @@ LLM 生成的散文。**多 agent 流程会产生多版本同 tick 的记录**�
 - 风险：>180k 字（>3 批）可能 endpoint 超时
 
 ### V2 = "建世界后逐章抽事件草稿"
-- 文件：`backend/app/engine/manuscript_events.py`
+- 文件：`backend/app/engine/manuscript/manuscript_events.py`
 - 触发：`WorldSettingsView` → `ManuscriptExtractSection` "抽取事件" → `manuscript_api.py` `/extract_events_async`
 - **异步 job**（前端 1.5s 轮询 `/jobs/{id}`）
 - LLM 输出：事件列表 + 因果链
@@ -118,41 +118,40 @@ V2 抽出但**未落库**的事件。结构和 Event 表类似，但只在 `worl
 - `run_reconcile`：用户编辑事件后重新做因果调和
 
 ### Tool Call（AI 工具调用）
-LLM 不直接写 SQL，而是输出 ToolCall（name + arguments），由 `engine/executor.py` 分发执行。12 个工具：
+LLM 不直接写 SQL，而是输出 ToolCall（name + arguments），由 `engine/core/executor.py` 分发执行。12 个工具：
 `create_entity` / `update_entity` / `add_event` / `update_event` / `delete_event` / `link_causality` / `advance_time` / `branch_world` / `narrate` / `set_position` / `move_entity` / `end_turn`
 
 ### State Snapshot（状态快照）
 **不要和 Snapshot 表搞混**。这是**每次推演前现算的、给 LLM 看的世界状态 JSON**，不写库。
-- 函数：`engine/state.py::build_state_snapshot()`
+- 函数：`engine/core/state.py::build_state_snapshot()`
 - 默认截断到最近 30 事件 + 80 实体（控 token）
 - `state_as_prompt()` 把它转成 markdown 喂 LLM
 
 ### Multi-Agent（多 agent 流程）
-有两条入口路径：
+SimView 一个入口，三种模式可切：
 
-**A. 旧版「两阶段」（`SimView`，仍保留）**
-1. **Director agent**（导演）：跑工具调用，输出 `director_draft` 叙述
-2. **Author agent**（作者）：把 draft 改写成 `author_final`，按 style profile 调语感
-
-可选第三阶段：
-3. **Editor agent**（编辑）：critique 一下，写 `editor_critique`
-
-`SimView` 的 "step（单 agent）" / "step（多 agent）" 走这条。
-
-**B. 新版「编排流水线」（`AgentRunView`，2026-05-21 上线）**
-1. **Director**：同上
-2. **Author**：同上
-3. **Critics**（N 个）：可配置多个审稿 agent，每个有自己的 focus（语感 / 人设 / 节奏…）和严格度（lenient/normal/strict）。
+**A. 编排流水线（默认，2026-05-21 推至前台）**
+1. **Director**：跑工具调用 + `director_draft`
+2. **Author**：按 style profile 改写成 `author_final`
+3. **Critics**（N 个）：可配置多个审稿 agent，每个有 focus（语感/人设/节奏…）和严格度（lenient/normal/strict）
    - 模式：`parallel`（一轮全跑）/ `serial`（第一个 fail 即停）
-   - 任一 critic `fail` → Author 按 critic 反馈重写 → 进入下一轮
+   - 任一 critic `fail` → Author 按反馈重写 → 进入下一轮
    - 到 `max_critic_retries` 仍未 pass → `forced_accept` 兜底
    - 预算：`max_llm_calls` + `max_wall_seconds`，触顶提前结束
 
-这条流水线的所有 LLM 调用都会写一条 **AgentTrace** 记录（input/output summary + 完整 prompt/response），前端 `AgentRunView` 实时拉取展示，可手动停止。
+每次 LLM 调用写一条 **AgentTrace**（input/output summary + 完整 prompt/response），SimView 实时拉取展示，可手动停止。
 
-**配置入口：** 世界设置 → "Agent 流水线"（`AgentPipelineSection`），支持 "保存到本世界 / 设为全局默认 / 重置为继承全局"。配置以 JSON 存 `world.agent_pipeline`，全局默认存 `app_settings`。
+**B. 单 agent（SimView 切换器关闭）**
+director → author 两阶段，没有 critic 重写。走 `engine/core/simulator.py` `step` / `auto`。
 
-**API：** `agent_pipeline_api.py`（GET/PUT 配置 + `/step_orchestrated` 启 job + `/jobs/{id}/agent_traces` 增量拉 trace）；引擎在 `engine/orchestrator.py::run_orchestrated_step`。
+**C. 多 agent (POV) — `step_multi_agent`**
+每个 focal character 先用自己 POV 给出 intent，再由 director pass 合并成世界事件。和编排流水线的 critic 路径不是一回事。引擎在 `engine/agents/multi_agent.py`。
+
+**配置入口：** 世界设置 → "Agent 流水线"（`AgentPipelineSection`），支持 "保存到本世界 / 设为全局默认 / 重置为继承全局"。配置 JSON 存 `world.agent_pipeline`，全局默认存 `app_settings`。
+
+**API：** `agent_pipeline_api.py`（GET/PUT 配置 + `/step_orchestrated` 启 job + `/jobs/{id}/agent_traces` 增量拉 trace）；引擎在 `engine/agents/orchestrator.py::run_orchestrated_step`。
+
+> 旧 `AgentRunView`（独立的 trace viewer 视图）路由 `/agent-run` 仍保留作直链调试用，侧边栏入口已移除（commit 9571b67）。
 
 ### Persona（人格）
 仅 `character` 实体的 `persona` JSON：`{drives, voice, knowledge_blindspots}`。给 LLM 当角色卡用。
@@ -208,6 +207,6 @@ LLM 扫描发现的潜在矛盾（角色行为前后不一、世界规则违反�
 | `tick` vs `created_at` | tick 是故事时间序号；created_at 是真实时间戳 |
 | `branch_id` vs `active_branch_id` | 前者是 entity/event 上的外键；后者是 World 表上"当前显示哪条"的字段 |
 | `narrator` vs `author_final` 角色 | narrator 是旧数据/单 agent；author_final 是多 agent 流程定稿 |
-| 两阶段 vs 编排流水线 | 两阶段（director→author，可选 editor）走 `SimView` + `engine/simulator.py`；编排流水线（director→author→critics 重试）走 `AgentRunView` + `engine/orchestrator.py`，两者并存 |
+| 两阶段 vs 编排流水线 | 两阶段（director→author，可选 editor）走 `engine/core/simulator.py`；编排流水线（director→author→critics 重试）走 `engine/agents/orchestrator.py`。SimView 切换器决定走哪条；旧 `AgentRunView` 路由 `/agent-run` 仅作直链调试，侧边栏入口已移除 |
 | Outline vs OutlineProgress | Outline 是用户写的文本；OutlineProgress 是结构化进度追踪 |
 | `manuscript_chunks` vs `manuscript_draft_events` | 前者是 V1 切的章节；后者是 V2 抽的事件草稿 |

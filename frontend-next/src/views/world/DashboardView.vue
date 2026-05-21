@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { worldsApi, llmApi, type WorldDetail } from '@/services/api';
+import { agentPipelineApi, type PipelineMetrics } from '@/services/agentApi';
 import { useToastStore } from '@/stores/toast';
 
 const route = useRoute();
@@ -12,6 +13,7 @@ const worldId = computed(() => route.params.id as string);
 const world = ref<WorldDetail | null>(null);
 const snapshot = ref<any>(null);
 const metrics = ref<any>(null);
+const pipelineMetrics = ref<PipelineMetrics | null>(null);
 const manuscript = ref<any>(null);
 const loading = ref(true);
 const err = ref('');
@@ -20,15 +22,17 @@ async function load() {
   loading.value = true;
   err.value = '';
   try {
-    const [snap, m, met] = await Promise.all([
+    const [snap, m, met, pm] = await Promise.all([
       worldsApi.get(worldId.value),
       worldsApi.manuscriptState(worldId.value).catch(() => null),
       llmApi.metrics({ hours: 24 }).catch(() => null),
+      agentPipelineApi.metrics(worldId.value, 168).catch(() => null),
     ]);
     snapshot.value = snap;
     world.value = snap.world;
     manuscript.value = m;
     metrics.value = met;
+    pipelineMetrics.value = pm;
   } catch (e: any) {
     err.value = e.message || String(e);
   } finally {
@@ -205,6 +209,75 @@ function goSettings(section: string) {
               {{ metrics.summary.errors }}
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Pipeline 指标（编排推演 7 天） -->
+      <div v-if="pipelineMetrics && pipelineMetrics.summary.total_jobs > 0" class="mb-8">
+        <h2 class="text-sm uppercase tracking-wider text-muted mb-3">
+          Pipeline 表现（7 天 · {{ pipelineMetrics.summary.total_jobs }} 次编排推演）
+        </h2>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+          <div class="stat-card">
+            <div class="text-muted text-xs">一次过 critic</div>
+            <div class="text-xl font-medium mt-1">
+              {{ pipelineMetrics.summary.first_pass }}
+              <span class="text-sm text-muted">
+                / {{ Math.round(pipelineMetrics.summary.first_pass_rate * 100) }}%
+              </span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="text-muted text-xs">平均 critic 轮数</div>
+            <div class="text-xl font-medium mt-1">{{ pipelineMetrics.summary.avg_critic_rounds }}</div>
+            <div v-if="pipelineMetrics.summary.avg_critic_rounds_when_retried" class="text-xs text-muted mt-0.5">
+              重写时均值 {{ pipelineMetrics.summary.avg_critic_rounds_when_retried }}
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="text-muted text-xs">强制接受</div>
+            <div class="text-xl font-medium mt-1"
+                 :class="pipelineMetrics.summary.forced_accept ? 'text-amber-600 dark:text-amber-400' : ''">
+              {{ pipelineMetrics.summary.forced_accept }}
+              <span class="text-sm text-muted">
+                / {{ Math.round(pipelineMetrics.summary.forced_accept_rate * 100) }}%
+              </span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="text-muted text-xs">活跃 critic</div>
+            <div class="text-xl font-medium mt-1">{{ Object.keys(pipelineMetrics.by_critic).length }}</div>
+          </div>
+        </div>
+        <div v-if="Object.keys(pipelineMetrics.by_critic).length" class="stat-card">
+          <div class="text-xs text-muted mb-2">各 critic 表现</div>
+          <table class="w-full text-sm">
+            <thead class="text-xs text-muted">
+              <tr>
+                <th class="text-left py-1 font-normal">名称</th>
+                <th class="text-right py-1 font-normal">运行</th>
+                <th class="text-right py-1 font-normal">pass</th>
+                <th class="text-right py-1 font-normal">fail</th>
+                <th class="text-right py-1 font-normal">fail 率</th>
+                <th class="text-right py-1 font-normal">均分</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(d, name) in pipelineMetrics.by_critic" :key="name"
+                  class="border-t border-border/30">
+                <td class="py-1.5 truncate">{{ name }}</td>
+                <td class="py-1.5 text-right font-mono text-xs">{{ d.runs }}</td>
+                <td class="py-1.5 text-right font-mono text-xs text-green-600">{{ d.pass }}</td>
+                <td class="py-1.5 text-right font-mono text-xs"
+                    :class="d.fail ? 'text-amber-600' : 'text-muted'">{{ d.fail }}</td>
+                <td class="py-1.5 text-right font-mono text-xs"
+                    :class="d.fail_rate > 0.5 ? 'text-amber-600' : 'text-muted'">
+                  {{ Math.round(d.fail_rate * 100) }}%
+                </td>
+                <td class="py-1.5 text-right font-mono text-xs text-muted">{{ d.avg_score ?? '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 

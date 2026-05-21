@@ -454,3 +454,125 @@ def test_save_and_load_global_default(tmp_path, monkeypatch):
     assert loaded.directors[0].name == "custom"
     assert loaded.critics[0].severity == "strict"
     assert loaded.max_critic_retries == 4
+
+
+# ===== Critic 跨轮记忆 =====
+
+def test_critic_prev_round_threaded_into_prompt(db, world_factory):
+    """同一 critic 在第 2 轮收到的 user_prompt 中应含上一轮自己的 verdict + suggestions。"""
+    w, _ = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="strict")],
+        max_critic_retries=2,
+    )
+    p = _director_then_critics_provider(
+        critic_responses=[
+            '{"verdict":"fail","score":3,"reason":"语感太散","suggestions":"凝练动词"}',
+            '{"verdict":"pass","score":8,"reason":"已收紧","suggestions":""}',
+        ],
+        author_rewrites=["收紧之后的版本。"],
+    )
+    res = run_orchestrated_step(db, w, "测试", job_id="j_prev", cfg=cfg, provider=p)
+    assert res["final_verdict"] == "pass"
+    # 找第 2 轮 critic trace（iteration=1）
+    second = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_prev",
+                AgentTrace.role == "critic",
+                AgentTrace.iteration == 1)
+        .first()
+    )
+    assert second is not None
+    assert "你上一轮的审稿" in second.full_prompt
+    assert "凝练动词" in second.full_prompt
+    assert (second.extra or {}).get("prev_round_used") is True
+    # 第一轮不应该有 prev_round
+    first = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_prev",
+                AgentTrace.role == "critic",
+                AgentTrace.iteration == 0)
+        .first()
+    )
+    assert (first.extra or {}).get("prev_round_used") is False
+
+
+# ===== forced_accept 含 unresolved_critics =====
+
+def test_forced_accept_returns_unresolved_critics(db, world_factory):
+    w, _ = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="strict")],
+        max_critic_retries=1,
+    )
+    p = _director_then_critics_provider(
+        critic_responses=[
+            '{"verdict":"fail","score":2,"reason":"始终不行","suggestions":"建议 A"}',
+            '{"verdict":"fail","score":2,"reason":"还是不行","suggestions":"建议 B"}',
+        ],
+        author_rewrites=["改了一次。"],
+    )
+    res = run_orchestrated_step(db, w, "测试", job_id="j_fa", cfg=cfg, provider=p)
+    assert res["final_verdict"] == "forced_accept"
+    unresolved = res.get("unresolved_critics") or []
+    assert len(unresolved) == 1
+    assert unresolved[0]["name"] == "strict"
+    assert "还是不行" in unresolved[0]["reason"]
+
+
+# ===== Pipeline 指标聚合 =====
+
+def test_query_pipeline_metrics_aggregates(db, world_factory):
+    from app.engine.agents.orchestrator import query_pipeline_metrics
+    w, _ = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="strict")],
+        max_critic_retries=1,
+    )
+    # job 1: 一次过
+    p1 = _director_then_critics_provider(
+        critic_responses=['{"verdict":"pass","score":9,"reason":"好","suggestions":""}'],
+    )
+    run_orchestrated_step(db, w, "1", job_id="m1", cfg=cfg, provider=p1)
+    # job 2: 一轮 fail → rewrite → pass
+    p2 = _director_then_critics_provider(
+        critic_responses=[
+            '{"verdict":"fail","score":3,"reason":"差","suggestions":"重写"}',
+            '{"verdict":"pass","score":8,"reason":"OK","suggestions":""}',
+        ],
+        author_rewrites=["改后。"],
+    )
+    run_orchestrated_step(db, w, "2", job_id="m2", cfg=cfg, provider=p2)
+    # job 3: 全 fail → forced_accept
+    p3 = _director_then_critics_provider(
+        critic_responses=[
+            '{"verdict":"fail","score":2,"reason":"差1","suggestions":"x"}',
+            '{"verdict":"fail","score":2,"reason":"差2","suggestions":"y"}',
+        ],
+        author_rewrites=["改后。"],
+    )
+    run_orchestrated_step(db, w, "3", job_id="m3", cfg=cfg, provider=p3)
+
+    m = query_pipeline_metrics(db, w.id, hours=24)
+    assert m["summary"]["total_jobs"] == 3
+    assert m["summary"]["forced_accept"] == 1
+    assert m["summary"]["first_pass"] == 1  # 只有 job 1 第一轮就 pass
+    assert m["summary"]["avg_critic_rounds"] >= 1.6  # (1+2+2)/3
+    by = m["by_critic"]["strict"]
+    assert by["runs"] == 5  # 1 + 2 + 2
+    assert by["pass"] == 2
+    assert by["fail"] == 3
+    assert len(m["recent_forced"]) == 1
+    assert m["recent_forced"][0]["unresolved_count"] == 1

@@ -129,12 +129,29 @@ severity 含义：
 - strict：高标准，有任何明显瑕疵就 fail（评分≤7 才 fail）"""
 
 
-def _build_critic_user_prompt(critic: CriticAgent, final_text: str, directive: Optional[str]) -> str:
+def _build_critic_user_prompt(
+    critic: CriticAgent,
+    final_text: str,
+    directive: Optional[str],
+    previous_round: Optional[dict] = None,
+) -> str:
     parts = []
     if directive:
         parts.append(f"# 用户本回合指令\n{directive}")
     parts.append(f"# 你的关注点（focus）\n{critic.focus or '（无特别关注，请整体把关）'}")
     parts.append(f"# 严格度\n{critic.severity}")
+    if previous_round:
+        prev_v = previous_round.get("verdict", "")
+        prev_r = previous_round.get("reason", "")
+        prev_s = previous_round.get("suggestions", "")
+        parts.append(
+            "# 你上一轮的审稿\n"
+            f"- verdict: {prev_v}\n"
+            f"- reason: {prev_r}\n"
+            f"- suggestions: {prev_s}\n"
+            "（作者已按上述建议改写。请只评估改后的版本是否解决了你提的问题；"
+            "如果解决就 pass；如仍未解决，说明哪一条建议没被采纳；不要重复上一轮提过且已被改掉的问题。）"
+        )
     parts.append(f"# 待审定稿\n{final_text}")
     parts.append("# 输出（仅 JSON）")
     return "\n\n".join(parts)
@@ -180,13 +197,14 @@ def _run_one_critic(
     provider: LLMProvider,
     budget: _Budget,
     cancel_check: Optional[Callable[[], bool]] = None,
+    previous_round: Optional[dict] = None,
 ) -> tuple[dict, AgentTrace]:
     if cancel_check and cancel_check():
         from ..core.simulator import CancelledError
         raise CancelledError()
     budget.check()
 
-    user_prompt = _build_critic_user_prompt(critic, final_text, directive)
+    user_prompt = _build_critic_user_prompt(critic, final_text, directive, previous_round)
     started = datetime.utcnow()
     t0 = time.monotonic()
     err_msg = ""
@@ -233,6 +251,7 @@ def _run_one_critic(
             "duration_ms": duration_ms,
             "severity": critic.severity,
             "error": err_msg or None,
+            "prev_round_used": bool(previous_round),
         },
         started_at=started,
         ended_at=datetime.utcnow(),
@@ -512,6 +531,7 @@ def run_orchestrated_step(
     # ----- critic phase -----
     final_verdict = "no_critics"
     critic_rounds = 0
+    unresolved_feedback: list[dict] = []  # forced_accept 时仍未解决的 critic 反馈
 
     if cfg.critics and final_text:
         from ..core.simulator import _resolve_provider, CancelledError
@@ -528,6 +548,7 @@ def run_orchestrated_step(
                 output_summary="跳过 critic 阶段（mock 模式或 provider 未配置）",
             )
         else:
+            prev_by_critic: dict[str, dict] = {}
             for iter_idx in range(cfg.max_critic_retries + 1):
                 critic_rounds = iter_idx + 1
                 feedback: list[dict] = []
@@ -539,6 +560,7 @@ def run_orchestrated_step(
                             parsed, _ = _run_one_critic(
                                 db, job_id, world, seq, iter_idx, c,
                                 final_text, user_directive, critic_provider, budget, cancel_check,
+                                previous_round=prev_by_critic.get(c.name),
                             )
                         except BudgetExhausted:
                             final_verdict = "budget_exhausted"
@@ -546,6 +568,11 @@ def run_orchestrated_step(
                         except CancelledError:
                             final_verdict = "cancelled"
                             break
+                        prev_by_critic[c.name] = {
+                            "verdict": parsed["verdict"],
+                            "reason": parsed["reason"],
+                            "suggestions": parsed["suggestions"],
+                        }
                         if parsed["verdict"] == "fail":
                             feedback.append({
                                 "name": c.name,
@@ -562,6 +589,7 @@ def run_orchestrated_step(
                             parsed, _ = _run_one_critic(
                                 db, job_id, world, seq, iter_idx, c,
                                 final_text, user_directive, critic_provider, budget, cancel_check,
+                                previous_round=prev_by_critic.get(c.name),
                             )
                         except BudgetExhausted:
                             final_verdict = "budget_exhausted"
@@ -569,6 +597,11 @@ def run_orchestrated_step(
                         except CancelledError:
                             final_verdict = "cancelled"
                             break
+                        prev_by_critic[c.name] = {
+                            "verdict": parsed["verdict"],
+                            "reason": parsed["reason"],
+                            "suggestions": parsed["suggestions"],
+                        }
                         if parsed["verdict"] == "fail":
                             feedback.append({
                                 "name": c.name,
@@ -600,6 +633,7 @@ def run_orchestrated_step(
                 else:
                     # 用完重试次数，强制接受
                     final_verdict = "forced_accept"
+                    unresolved_feedback = feedback
                     seq += 1
                     _write_trace(
                         db, job_id=job_id, world_id=world.id, seq=seq,
@@ -607,7 +641,7 @@ def run_orchestrated_step(
                         status="done", verdict="forced_accept",
                         input_summary=f"已重写 {cfg.max_critic_retries} 次",
                         output_summary=f"达到重试上限，强制接受当前定稿（仍有 {len(feedback)} 个 critic 反对）",
-                        extra={"feedback": feedback},
+                        extra={"feedback": feedback, "is_forced_accept": True},
                     )
                     break
 
@@ -622,8 +656,127 @@ def run_orchestrated_step(
         "narration": final_text,
         "critic_rounds": critic_rounds,
         "final_verdict": final_verdict,
+        "unresolved_critics": unresolved_feedback,
         "budget_used": {
             "llm_calls": budget.calls,
             "wall_seconds": int(time.monotonic() - budget.start),
         },
+    }
+
+
+def query_pipeline_metrics(db: Session, world_id: str, hours: int = 168) -> dict:
+    """聚合 AgentTrace 给出 pipeline 维度指标。
+
+    返回：
+      summary: total_jobs / forced_accept / forced_accept_rate / first_pass / first_pass_rate
+               / avg_critic_rounds / avg_critic_rounds_when_retried
+      by_critic: {name: {runs, pass, fail, error, avg_score, fail_rate}}
+      recent_forced: 最近 forced_accept 的 job 列表（job_id, ts, unresolved_count, traces 摘要）
+    """
+    from datetime import timedelta
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+
+    rows = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.world_id == world_id, AgentTrace.started_at >= cutoff)
+        .order_by(AgentTrace.started_at.asc(), AgentTrace.seq.asc())
+        .all()
+    )
+
+    by_job: dict[str, list[AgentTrace]] = {}
+    for r in rows:
+        by_job.setdefault(r.job_id, []).append(r)
+
+    total_jobs = 0
+    forced_accept_jobs: list[dict] = []
+    first_pass_jobs = 0
+    rounds_total = 0
+    rounds_when_retried_total = 0
+    rounds_when_retried_count = 0
+
+    by_critic: dict[str, dict] = {}
+
+    for job_id, traces in by_job.items():
+        critic_traces = [t for t in traces if t.role == "critic"]
+        # 只把"真的跑过 critic"的 job 算进来；纯单 agent / no_critics 的不参与统计
+        if not critic_traces:
+            continue
+        total_jobs += 1
+        max_iter = max(t.iteration for t in critic_traces)
+        critic_rounds = max_iter + 1
+        rounds_total += critic_rounds
+        if critic_rounds > 1:
+            rounds_when_retried_total += critic_rounds
+            rounds_when_retried_count += 1
+
+        # 第一轮全 pass = first_pass
+        round0 = [t for t in critic_traces if t.iteration == 0]
+        if round0 and all(t.verdict == "pass" for t in round0):
+            first_pass_jobs += 1
+
+        # forced_accept 检测
+        fa = next(
+            (t for t in traces if t.role == "orchestrator" and t.verdict == "forced_accept"),
+            None,
+        )
+        if fa is not None:
+            unresolved = (fa.extra or {}).get("feedback") or []
+            forced_accept_jobs.append({
+                "job_id": job_id,
+                "ts": fa.started_at.isoformat() if fa.started_at else None,
+                "unresolved_count": len(unresolved),
+                "unresolved": unresolved[:5],
+            })
+
+        # 每个 critic 的统计
+        for t in critic_traces:
+            name = t.agent_name or "(unnamed)"
+            d = by_critic.setdefault(name, {
+                "runs": 0, "pass": 0, "fail": 0, "error": 0,
+                "score_sum": 0, "score_count": 0,
+            })
+            d["runs"] += 1
+            if t.status == "error":
+                d["error"] += 1
+            elif t.verdict == "pass":
+                d["pass"] += 1
+            elif t.verdict == "fail":
+                d["fail"] += 1
+            score = (t.extra or {}).get("score")
+            if isinstance(score, (int, float)):
+                d["score_sum"] += float(score)
+                d["score_count"] += 1
+
+    by_critic_out = {}
+    for name, d in by_critic.items():
+        runs = d["runs"]
+        avg_score = round(d["score_sum"] / d["score_count"], 2) if d["score_count"] else None
+        by_critic_out[name] = {
+            "runs": runs,
+            "pass": d["pass"],
+            "fail": d["fail"],
+            "error": d["error"],
+            "avg_score": avg_score,
+            "fail_rate": round(d["fail"] / runs, 3) if runs else 0.0,
+        }
+
+    summary = {
+        "total_jobs": total_jobs,
+        "forced_accept": len(forced_accept_jobs),
+        "forced_accept_rate": round(len(forced_accept_jobs) / total_jobs, 3) if total_jobs else 0.0,
+        "first_pass": first_pass_jobs,
+        "first_pass_rate": round(first_pass_jobs / total_jobs, 3) if total_jobs else 0.0,
+        "avg_critic_rounds": round(rounds_total / total_jobs, 2) if total_jobs else 0.0,
+        "avg_critic_rounds_when_retried": (
+            round(rounds_when_retried_total / rounds_when_retried_count, 2)
+            if rounds_when_retried_count else None
+        ),
+        "hours": hours,
+    }
+
+    forced_accept_jobs.sort(key=lambda j: j["ts"] or "", reverse=True)
+    return {
+        "summary": summary,
+        "by_critic": by_critic_out,
+        "recent_forced": forced_accept_jobs[:5],
     }

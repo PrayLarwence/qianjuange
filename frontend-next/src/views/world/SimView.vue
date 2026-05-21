@@ -203,7 +203,16 @@ async function runSingle() {
               if ((j.result as any)?.narration) liveNarration.value = (j.result as any).narration;
               await refreshAfterRun(lastResult.value || undefined);
               checkConsistency();
-              toast.success(`编排推演完成 · ${j.result?.critic_rounds || 0} 轮审稿`);
+              const verdict = (j.result as any)?.final_verdict;
+              const rounds = j.result?.critic_rounds || 0;
+              if (verdict === 'forced_accept') {
+                const n = ((j.result as any)?.unresolved_critics || []).length;
+                toast.error(`编排完成但强制接受 · ${rounds} 轮后仍有 ${n} 个 critic 反对`);
+              } else if (verdict === 'budget_exhausted') {
+                toast.error(`预算耗尽 · 已完成 ${rounds} 轮`);
+              } else {
+                toast.success(`编排推演完成 · ${rounds} 轮审稿`);
+              }
             } else {
               runError.value = j.progress_message || j.error || '编排推演失败';
               toast.error(runError.value);
@@ -561,6 +570,38 @@ function toolArgPreview(c: JobToolCall): string {
           <div v-if="liveNarration" class="mb-6">
             <p class="text-muted text-xs uppercase tracking-wider mb-2">叙述</p>
             <div class="surface rounded p-5 font-serif leading-relaxed whitespace-pre-wrap">{{ liveNarration }}</div>
+          </div>
+        </section>
+
+        <!-- 编排结果警示带：forced_accept / budget_exhausted -->
+        <section v-if="!running && lastResult && (lastResult as any).final_verdict === 'forced_accept'" class="mb-10">
+          <div class="surface rounded p-4 border-l-2 border-amber-500 bg-amber-500/5">
+            <p class="text-xs uppercase tracking-wider text-amber-600 dark:text-amber-400 mb-1">
+              强制接受（达到重试上限）
+            </p>
+            <p class="text-sm text-muted mb-2">
+              已重写 {{ (lastResult as any).critic_rounds }} 轮，仍有
+              {{ ((lastResult as any).unresolved_critics || []).length }} 个 critic 反对。这条 tick 已落库，但建议人工复审。
+            </p>
+            <ul v-if="((lastResult as any).unresolved_critics || []).length" class="space-y-1.5 mt-3">
+              <li v-for="(c, i) in (lastResult as any).unresolved_critics" :key="i"
+                  class="text-xs">
+                <span class="font-medium text-amber-600 dark:text-amber-400">【{{ c.name }}】</span>
+                <span class="text-muted">{{ c.reason }}</span>
+                <div v-if="c.suggestions" class="text-muted/80 ml-4 mt-0.5">建议：{{ c.suggestions }}</div>
+              </li>
+            </ul>
+          </div>
+        </section>
+        <section v-else-if="!running && lastResult && (lastResult as any).final_verdict === 'budget_exhausted'" class="mb-10">
+          <div class="surface rounded p-4 border-l-2 border-amber-500 bg-amber-500/5">
+            <p class="text-xs uppercase tracking-wider text-amber-600 dark:text-amber-400 mb-1">
+              预算耗尽
+            </p>
+            <p class="text-sm text-muted">
+              已用 {{ (lastResult as any).budget_used?.llm_calls || '?' }} 次 LLM 调用 /
+              {{ (lastResult as any).budget_used?.wall_seconds || '?' }} 秒。可在世界设置 → Agent 流水线放宽预算。
+            </p>
           </div>
         </section>
 

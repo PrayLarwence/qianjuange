@@ -61,14 +61,22 @@ cd frontend-next && npm run build
 backend/app/
   models/         数据模型（SQLAlchemy）。world.py 是核心
   providers/      LLM 适配器
-  engine/         推演引擎、工具集、各种 LLM 流程
+  engine/         推演引擎（已按域归入 8 子目录，旧扁平路径保留为 stub 转发，不会断 import）
+                  ├── agents/      orchestrator / agent_pipeline / author / editor / multi_agent / character_view / dialogue_rehearsal
+                  ├── manuscript/  manuscript_ingest（V1）/ manuscript_events（V2）/ scene_continuity
+                  ├── consistency/ consistency / patch
+                  ├── core/        simulator / executor / tools / state / snapshots / jobs / metrics
+                  ├── narrative/   novelize / pov / recap / persona_extract / draft_cleanup / thread_aging / transitions
+                  ├── worldgen/    worldgen / blueprint / blueprint_render / lore_gaps / style_seeds
+                  ├── embedding/   base / local_bge / siliconflow / zhipu
+                  └── map/         map_sim
   api/            FastAPI 路由（已按业务域拆分，见下）
 
 frontend-next/src/
   views/world/    各 tab 视图（Sim/Cast/Timeline/Chapters 等）
   views/          顶层视图（WorldsLibrary/Home/Settings）
   components/                          全局共享组件
-  components/world-settings/           WorldSettingsView 拆出的 7 个 section
+  components/world-settings/           WorldSettingsView 拆出的 8 个 section
   services/api.ts 单文件 API 客户端
   stores/         Pinia stores
 
@@ -77,7 +85,7 @@ docs/             设计文档 + 词汇表
 ```
 
 ### `backend/app/api/` 路由分布
-2025 年初做了拆分：原 ~2680 行 routes.py 拆成 19 个子模块，主文件压到 46 行只做 router 聚合。**加新端点时**：
+2025 年初做了拆分（2026-05 完成）：原 ~2680 行 routes.py 拆成 19 个子模块，主文件压到 46 行只做 router 聚合。**加新端点时**：
 
 1. 找最贴近业务域的 `*_api.py` 加进去
 2. 都不贴近就新建 `xxx_api.py`，在 `routes.py` 加两行 `import` + `include_router`
@@ -119,13 +127,14 @@ WorldSettingsView 在 2025 年拆成了 8 个 section（每个 50–420 行）�
 
 | 流程 | 前端入口 | API | 引擎 | 写表 |
 | --- | --- | --- | --- | --- |
-| 推演（传统） | `SimView` | `step_api.py` | `engine/simulator.py` + `executor.py` + 12 个工具 | Event / Entity / CausalLink / NarrativeLog |
-| 推演（编排） | `AgentRunView` | `agent_pipeline_api.py` `/step_orchestrated` | `engine/orchestrator.py` | Event / Entity / CausalLink / NarrativeLog / AgentTrace |
-| V1 建世界 | `WorldsLibraryView` "📖 从手稿建" | `worlds_api.py` `/from_manuscript` | `manuscript_ingest.py`（同步） | World / Branch / Entity（cast/locations） |
-| V2 抽事件 | `ManuscriptExtractSection` | `manuscript_api.py` `/extract_events_async` | `manuscript_events.py`（job） | `world.manuscript_draft_events`（JSON，**未落库**） |
+| 推演（默认） | `SimView` 切换器 ON | `agent_pipeline_api.py` `/step_orchestrated` | `engine/agents/orchestrator.py` | Event / Entity / CausalLink / NarrativeLog / AgentTrace |
+| 推演（单 agent） | `SimView` 切换器 OFF | `step_api.py` | `engine/core/simulator.py` + `executor.py` + 12 个工具 | Event / Entity / CausalLink / NarrativeLog |
+| 推演（POV） | `SimView` "多 agent" | `step_api.py` `/step_multi_agent` | `engine/agents/multi_agent.py` | 同上 |
+| V1 建世界 | `WorldsLibraryView` "📖 从手稿建" | `worlds_api.py` `/from_manuscript` | `engine/manuscript/manuscript_ingest.py`（同步） | World / Branch / Entity（cast/locations） |
+| V2 抽事件 | `ManuscriptExtractSection` | `manuscript_api.py` `/extract_events_async` | `engine/manuscript/manuscript_events.py`（job） | `world.manuscript_draft_events`（JSON，**未落库**） |
 | V2 落库 | 同上，审阅 → commit | `manuscript_api.py` `/commit_events` | 直接写库 | Event + CausalLink |
-| 一致性扫描 | `ReviewView` | `consistency_api.py` | `engine/consistency.py` + `patch.py` + `scene_continuity.py` | ConsistencyIssue / ScanRun / IssuePatch |
-| 章节渲染 | `ChaptersView` | `manuscript_render_api.py` / `novelize_api.py` | `engine/author.py` / `editor.py` | NarrativeLog（role=author_final）/ ChapterMarker |
+| 一致性扫描 | `ReviewView` | `consistency_api.py` | `engine/consistency/consistency.py` + `consistency/patch.py` + `manuscript/scene_continuity.py` | ConsistencyIssue / ScanRun / IssuePatch |
+| 章节渲染 | `ChaptersView` | `manuscript_render_api.py` / `novelize_api.py` | `engine/agents/author.py` / `agents/editor.py` / `narrative/novelize.py` | NarrativeLog（role=author_final）/ ChapterMarker |
 | 整本导出 | `ChaptersView` "导出" | `export_novel_api.py` | 拼接 NarrativeLog + ChapterMarker | 输出文件，不写库 |
 
 **记住**：推演 step 写出的 Event 和 V2 落库的 Event 共用同一张表。章节渲染和一致性扫描读的也是这张表。所以 V2 commit 后用户能继续推演、能直接渲染章节。
@@ -142,7 +151,7 @@ WorldSettingsView 在 2025 年拆成了 8 个 section（每个 50–420 行）�
 
 ### 标准做法
 - **加新 LLM provider**：在 `backend/app/providers/` 加文件，注册到 `PROVIDER_CLASSES`
-- **加新工具（AI 调用的）**：在 `engine/executor.py` 实现函数 + 在 `engine/tools.py`（或对应 spec 文件）登记 schema
+- **加新工具（AI 调用的）**：在 `engine/core/executor.py` 实现函数 + 在 `engine/core/tools.py`（或对应 spec 文件）登记 schema
 - **加 schema 字段**：改 `models/world.py`，启动时 SQLAlchemy 会自动建表，但**老库不会自动加列**——需要手动 `ALTER TABLE` 或删 `data/world.db` 重建
 - **改前端 API 调用**：所有 fetch 都走 `services/api.ts`，不要直接 `fetch()`
 

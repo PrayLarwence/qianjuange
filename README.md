@@ -15,7 +15,7 @@
 代码 build 通过，397 后端测试全过，27 前端测试全过，vue-tsc 0 错，vite build 干净。**没跑端到端真实小说回归**，只验证类型/编译/单测。
 
 ### 工程债清理（2026-05）
-- engine 31 文件归入 7 子目录（agents/manuscript/consistency/worldgen/core/narrative/map），旧位置 stub 兼容
+- engine 31 文件归入 8 子目录（agents/manuscript/consistency/worldgen/core/narrative/embedding/map），旧位置 stub 兼容
 - manuscript_chunks 独立表（JSON 列迁出为 ManuscriptChunk 表，自动迁移旧数据）
 - Entity.aliases 独立列（从 attributes JSON 拆出）
 - metrics 可观测性：LlmCallMetric 表 + MetricsProvider 包装器 + `GET /metrics` 聚合查询
@@ -29,6 +29,12 @@
 - V2 审阅增强：每个草稿事件可展开原文 200 字对照
 - 推演后自动一致性检查，SimView 顶栏显示待处理问题数
 - SettingsDrawer：LLM 配置面板（provider/model/key/测试连接）+ 24h metrics 统计
+
+### Pipeline 深化（首批，2026-05）
+- **Critic 跨轮记忆**：第 N 轮 critic 收到自己上轮的 verdict / reason / suggestions，prompt 里指示"只评估改后是否解决，不要复读已修问题"。trace `extra.prev_round_used` 标记是否吃了上轮记忆
+- **forced_accept 浮出水面**：`run_orchestrated_step` 返回 `unresolved_critics` 数组；SimView 在 forced_accept / budget_exhausted 时显示警示带，列出每个未解决 critic 的 reason + suggestions
+- **Pipeline 指标进 Dashboard**：新端点 `GET /worlds/{id}/pipeline_metrics?hours=168`，聚合 AgentTrace 给出 first_pass_rate / forced_accept_rate / avg_critic_rounds + 每个 critic 的 runs/pass/fail/fail_rate/avg_score。DashboardView 加 Pipeline 卡片
+- 测试：`test_critic_prev_round_threaded_into_prompt` + `test_forced_accept_returns_unresolved_critics` + `test_query_pipeline_metrics_aggregates`
 
 ### 体验优化
 - **仪表盘**（DashboardView）：世界统计 + LLM metrics + 实体分布 + 最近事件 + LLM 调用日志
@@ -68,17 +74,17 @@ ManuscriptExtractSection (417) DangerZoneSection (48)
 **T3 全部 + T2 全部 + T1 全部**，build 通过，没跑端到端真实小说验证。
 
 ### T1：一致性扫描全链路（已落地）
-- `consistency.py`（300 行）：五类扫描（性格/能力/规则/时间线/关系）+ `scene_continuity.py`（229 行）：场景连续性专用扫描
-- `patch.py`（326 行）：editor 输出可 apply/reject/undo 的文字 patch，`consistency_api.py` 12 个端点完整覆盖
+- `engine/consistency/consistency.py`（300 行）：五类扫描（性格/能力/规则/时间线/关系）+ `engine/manuscript/scene_continuity.py`（229 行）：场景连续性专用扫描
+- `engine/consistency/patch.py`（326 行）：editor 输出可 apply/reject/undo 的文字 patch，`consistency_api.py` 12 个端点完整覆盖
 - `ReviewView.vue`（416 行）：status/severity 过滤、展开详情、patch 管理、entity 关联
-- 自纠环：`simulator.py` 的 `_build_self_correction_block()` 取 top-5 open issue 喂 director
+- 自纠环：`engine/core/simulator.py` 的 `_build_self_correction_block()` 取 top-5 open issue 喂 director
 - 测试：`test_consistency.py` + `test_issue_patch.py` + `test_scene_continuity.py`
 
 ### Agent Pipeline 编排流水线（全新）
-- `agent_pipeline.py`（150 行）：PipelineConfig schema + 全局 default 持久化（`data/agent_pipeline_default.json`）
-- `orchestrator.py`（629 行）：director→author→critics 编排，支持 parallel/serial critic 模式、重试循环、预算控制（max_llm_calls + max_wall_seconds）
+- `engine/agents/agent_pipeline.py`（150 行）：PipelineConfig schema + 全局 default 持久化（`data/agent_pipeline_default.json`）
+- `engine/agents/orchestrator.py`（629 行）：director→author→critics 编排，支持 parallel/serial critic 模式、重试循环、预算控制（max_llm_calls + max_wall_seconds）
 - `agent_pipeline_api.py`：配置 CRUD + `/step_orchestrated` 异步 job + trace 增量拉取
-- `AgentRunView.vue`（283 行）：实时 trace viewer，按 job 拉取、展开完整 prompt/response
+- `SimView` 集成（commit 8e6e695 推至前台）：默认走编排，切换器可回退单 agent；旧 `AgentRunView.vue` 仍保留路由 `/agent-run` 作直链调试用，侧边栏入口已移除
 - `AgentPipelineSection.vue`（247 行）：WorldSettingsView 第 8 个 section，支持"保存到本世界 / 设为全局默认 / 重置为继承全局"
 - `AgentTrace` 表：每次 LLM 调用写一条，含 full_prompt/full_response
 - 测试：`test_orchestrator.py`
@@ -88,7 +94,7 @@ ManuscriptExtractSection (417) DangerZoneSection (48)
 
 ### T3-B：按章节范围抽取
 - 后端 `manuscript_api.py` `/manuscript/extract_events_async` 接收可选 `chapter_indices`
-- `backend/app/engine/manuscript_events.py` `extract_events()` 加 `chapter_indices` + `on_batch_complete` 回调
+- `backend/app/engine/manuscript/manuscript_events.py` `extract_events()` 加 `chapter_indices` + `on_batch_complete` 回调
 - 合并语义：抽全部 → 替换整张 draft；抽指定范围 → 仅替换那几章，其它章节既有 draft 保留
 - 前端 `ManuscriptExtractSection` 加范围输入 `5-7,10` 解析
 
@@ -96,19 +102,19 @@ ManuscriptExtractSection (417) DangerZoneSection (48)
 runner 维护 `accumulated` 列表，每批 LLM 完 → 立刻 `manuscript_draft_events = accumulated; commit()`。崩溃后再次抽取只重跑剩余章节（配合 T3-B 范围筛选）。
 
 ### T2-A：V1 长小说分批抽骨架
-`backend/app/engine/manuscript_ingest.py` 由单次 LLM 改成滑动批次（`PER_BATCH_CHARS=60_000` / `CHAPTERS_PER_BATCH=30` 双约束）。多批合并 cast / locations / factions / outline。`MAX_OUTLINE` 80 → 200。
+`backend/app/engine/manuscript/manuscript_ingest.py` 由单次 LLM 改成滑动批次（`PER_BATCH_CHARS=60_000` / `CHAPTERS_PER_BATCH=30` 双约束）。多批合并 cast / locations / factions / outline。`MAX_OUTLINE` 80 → 200。
 
 **风险**：V1 仍同步 endpoint。> 3 批（>180k 字）可能踩超时。下一步若需要要改成 job 异步（参考 V2 `extract_events_async` runner 写法）。
 
 ### T2-B：角色别名归一
-- `manuscript_ingest.py` SYSTEM_PROMPT 加 `aliases:[]`，`_normalize_cast` 收 aliases，多批合并按 `cast_alias_owner` 归并
+- `engine/manuscript/manuscript_ingest.py` SYSTEM_PROMPT 加 `aliases:[]`，`_normalize_cast` 收 aliases，多批合并按 `cast_alias_owner` 归并
 - `worlds_api.py` `create_world_from_manuscript` 写 `Entity.attributes['aliases']`
 - `manuscript_api.py` V2 `extract_manuscript_events_async` 构 lookup 时把 aliases 一并加入
 
 **风险**：识别率取决于模型。如果 LLM 不肯吐 aliases，需要更激进 prompt。
 
 ### T2-C：因果链抽取
-- `manuscript_events.py` 新增 `extract_causal_links()`：滑动窗口（60 事件 / 重叠一半 / `CAUSAL_LOOKBACK_TICKS=80`）
+- `engine/manuscript/manuscript_events.py` 新增 `extract_causal_links()`：滑动窗口（60 事件 / 重叠一半 / `CAUSAL_LOOKBACK_TICKS=80`）
 - `DraftEvent.causes: list[int]`（上游 tick 列表）
 - V2 runner：抽完事件再跑因果 pass，写回每个 event 的 `causes`
 - `commit_events` 接收 `causes`，按 draft_tick→event_id 映射写 `CausalLink` 行
@@ -142,6 +148,42 @@ cd frontend-next && npm run dev                     # 前端
 ```
 或 Windows 一键：`run.bat`
 
+## Pipeline 深化路线（剩余）
+
+按"中→高成本 / 影响"排，按需推进：
+
+### 4. Best-of-K 在 Author 阶段（中成本，质感跃升）
+当前 1 个 author 跑出来不行就重写。改成"K 个版本并行（不同 temperature / system prompt 微调），critics 给每个打分，取最高，仍 fail 触发重写"。
+- 实现要点：`_author_phase` 改成 K 路 `asyncio.gather`；critic 一次性看 K 个候选给出 ranked verdict；K=1 时退化为现状
+- 代价：LLM 调用 ×K。建议做成 toggle，只对"重要 tick"开（用户标星 / 大事件）
+- 风险：K 个候选高度同质 → 浪费预算。需要 prompt 里强制差异化（"version A 偏对话，version B 偏内心"）
+
+### 5. Recap / Arc 喂 Critic（中成本，跨 tick 一致性）
+Director 已用 chapter recap（`engine/narrative/recap.py`）和 issue 自纠环。Critic 看不到这些。加一个 "Arc Critic" 专管：本 tick 是否推进主线、是否和 N tick 前的设定冲突。
+- 实现要点：`_build_critic_user_prompt` 加可选 `arc_context` 段；新建 `CriticAgent.kind: 'arc'` 类型，从 `engine/narrative/recap.build_recap_block()` 取上下文塞进去
+- 代价：长 prompt → 慢 + 贵；和现有"人设 / 文风"critic 部分关切重叠
+- 配合：`AgentPipelineSection` 加"Arc critic"快捷模板按钮
+
+### 6. 多 Author 分工（结构性，工作室模式）
+dialogue / description / action 三个 author 各擅长一段，stitcher agent 拼起来。或两 author 走不同 style，critics 投票挑。
+- 实现要点：`PipelineConfig.authors` 列表语义从"主备"改成"分段"，加 `AuthorAgent.role: 'dialogue' | 'description' | 'action' | 'stitcher'`；author phase 重写为分段→并行→拼接
+- 风险：风格断层。stitcher 必须能感知整段语气是否一致
+- 前置：style profile 系统需要扩成"按段落类型映射"，否则三个 author 拿同一份 style 没意义
+
+### 7. V2 抽取也接 Critic（中成本，准确率提升）
+现在 manuscript 抽事件 → 直接 commit，没有审稿。LLM 抽错了用户得肉眼审。加 "fact-check critic" 对比原文 source_context 验证 event，对不上退回重抽。
+- 实现要点：`engine/manuscript/manuscript_events.py` 的 `extract_events()` 加可选 `fact_check_pass`；用 `event.source_context`（已存）做 grounding 验证；不通过的事件标 `needs_review`
+- 配合：审阅 UI 加"fact-check 失败"过滤器
+- 代价：抽取耗时翻倍；但能省掉用户审阅时间，净收益
+
+### 8. 用户反馈闭环（结构性，在线学习）
+读完一章打个分（差/普通/好），低分 tick 的 critic chain 进负例库，下次同类场景的 critic prompt 附"以下是过去类似情境的失败案例"。
+- 实现要点：新建 `chapter_feedback` 表（chapter_id + score + comment）；critic prompt 拼接时检索同 world / 同 critic 的历史负例（top-3 by recency）
+- 风险：prompt 失控膨胀；负例库可能过拟合早期评分
+- 前置：先把 ChaptersView 加打分按钮，跑几周收集数据再启用闭环
+
+---
+
 ## 下一批待办
 1. **端到端真实小说测试**（最大空缺）：找一本 100k+ 字中文小说，跑完整 V1→V2→审阅→续写→导出，记录阻断性 bug
 2. **前端测试扩展**：当前 27 条覆盖 stores + 2 组件，View 层仍无测试
@@ -168,10 +210,15 @@ cd frontend-next && npm run dev                     # 前端
 backend/app/
   models/      SQLAlchemy + SQLite（world.db）
   providers/   Claude / OpenAI / DeepSeek / Ollama
-  engine/      推演引擎、工具集、小说化、一致性、地图、persona
-               manuscript_ingest（V1）、manuscript_events（V2）
-               orchestrator（编排流水线）、agent_pipeline（配置）
-               metrics（LLM 调用记录）
+  engine/      已按域归入 8 子目录（旧扁平路径保留为 stub 转发，不会断 import）
+               agents/      orchestrator / agent_pipeline / author / editor / multi_agent / character_view / dialogue_rehearsal
+               manuscript/  manuscript_ingest（V1）/ manuscript_events（V2）/ scene_continuity
+               consistency/ consistency / patch
+               core/        simulator / executor / tools / state / snapshots / jobs / metrics
+               narrative/   novelize / pov / recap / persona_extract / draft_cleanup / thread_aging / transitions
+               worldgen/    worldgen / blueprint / blueprint_render / lore_gaps / style_seeds
+               embedding/   base / local_bge / siliconflow / zhipu
+               map/         map_sim
   api/         FastAPI 路由 — routes.py 仅 46 行 router 聚合
                业务端点拆在 *_api.py 子模块（见下）
 frontend-next/  Vue 3 + Vite + TS（新前端，主用）
@@ -320,7 +367,7 @@ flowchart TB
 
 | 维度 | V1 | V2 |
 | --- | --- | --- |
-| 文件 | `engine/manuscript_ingest.py` | `engine/manuscript_events.py` |
+| 文件 | `engine/manuscript/manuscript_ingest.py` | `engine/manuscript/manuscript_events.py` |
 | 触发 | 建世界时（必经） | 建世界后（可选） |
 | 同步性 | 同步 endpoint | 异步 job runner |
 | 长篇风险 | >180k 字可能超时 | 无（job 模式） |

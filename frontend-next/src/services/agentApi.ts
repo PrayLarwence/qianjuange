@@ -85,7 +85,35 @@ export interface OrchestratedStepResult {
   narration: string;
   critic_rounds: number;
   final_verdict: 'pass' | 'forced_accept' | 'no_critics' | 'budget_exhausted' | 'cancelled';
+  unresolved_critics?: { name: string; reason: string; suggestions: string }[];
   budget_used: { llm_calls: number; wall_seconds: number };
+}
+
+export interface PipelineMetrics {
+  summary: {
+    total_jobs: number;
+    forced_accept: number;
+    forced_accept_rate: number;
+    first_pass: number;
+    first_pass_rate: number;
+    avg_critic_rounds: number;
+    avg_critic_rounds_when_retried: number | null;
+    hours: number;
+  };
+  by_critic: Record<string, {
+    runs: number;
+    pass: number;
+    fail: number;
+    error: number;
+    avg_score: number | null;
+    fail_rate: number;
+  }>;
+  recent_forced: {
+    job_id: string;
+    ts: string | null;
+    unresolved_count: number;
+    unresolved: { name: string; reason: string; suggestions: string }[];
+  }[];
 }
 
 export const agentPipelineApi = {
@@ -118,6 +146,10 @@ export const agentPipelineApi = {
   // 单条 trace 完整 prompt + response
   traceFull: (jobId: string, traceId: string) =>
     api.get<AgentTraceFull>(`/api/jobs/${jobId}/agent_traces/${traceId}/full`),
+
+  // Pipeline 指标聚合
+  metrics: (worldId: string, hours = 168) =>
+    api.get<PipelineMetrics>(`/api/worlds/${worldId}/pipeline_metrics?hours=${hours}`),
 };
 
 // 工具：构造一个最小可用的空白配置（前端 UI 新增 critic 时用）
