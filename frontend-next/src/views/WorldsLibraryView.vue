@@ -184,7 +184,7 @@ async function doDelete() {
         <h1 class="font-serif text-3xl">所有世界</h1>
       </div>
       <div class="flex items-center gap-2">
-        <input ref="jsonFileInput" type="file" accept=".json,application/json"
+        <input ref="jsonFileInput" type="file"
                class="hidden" @change="onJsonPicked" />
         <button class="btn btn-ghost" :disabled="jsonImporting" @click="pickJson">
           {{ jsonImporting ? '导入中…' : '⬆ 导入存档' }}
@@ -271,8 +271,8 @@ async function doDelete() {
             <span class="text-xs uppercase tracking-wider text-muted">原稿正文</span>
             <div class="flex items-center gap-2">
               <label class="btn btn-ghost text-xs cursor-pointer">
-                ⬆ 上传 .txt / .md
-                <input type="file" accept=".txt,.md,.markdown,.text,text/plain,.html,.htm"
+                ⬆ 上传文本文件
+                <input type="file"
                        class="hidden" @change="onManuscriptFile" />
               </label>
               <span class="text-xs text-muted font-mono">
