@@ -175,14 +175,34 @@ def _parse_critic_response(text: str) -> dict:
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", s, re.S)
     if m:
         s = m.group(1)
-    # 再退一步：抓第一个 {...} 块
-    if not s.startswith("{"):
-        m = re.search(r"\{.*\}", s, re.S)
-        if m:
-            s = m.group(0)
+    obj: dict | None = None
+    # 先试整体
     try:
-        obj = json.loads(s)
+        parsed = json.loads(s)
+        if isinstance(parsed, dict):
+            obj = parsed
     except Exception:
+        pass
+    # 退一步：括号匹配抽第一个完整 {...}
+    if obj is None:
+        start = s.find("{")
+        while start != -1 and obj is None:
+            depth = 0
+            for i in range(start, len(s)):
+                if s[i] == "{":
+                    depth += 1
+                elif s[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            parsed = json.loads(s[start:i + 1])
+                            if isinstance(parsed, dict):
+                                obj = parsed
+                        except Exception:
+                            pass
+                        break
+            start = s.find("{", start + 1)
+    if obj is None:
         return {"verdict": "pass", "score": 5, "reason": "(critic response unparseable, default pass)", "suggestions": ""}
     verdict = str(obj.get("verdict", "pass")).lower().strip()
     if verdict not in ("pass", "fail"):

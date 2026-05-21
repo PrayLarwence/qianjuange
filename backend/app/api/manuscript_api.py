@@ -41,6 +41,7 @@ def _load_chunks(db: Session, world_id: str) -> list[dict]:
     legacy = (world.manuscript_chunks or []) if world else []
     if legacy:
         _save_chunks(db, world_id, legacy)
+        db.commit()
     return legacy
 
 
