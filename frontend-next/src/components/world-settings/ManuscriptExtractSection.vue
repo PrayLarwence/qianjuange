@@ -27,7 +27,7 @@ const extractRangeText = ref<string>('');
 let pollTimer: number | null = null;
 
 const reviewOpen = ref(false);
-type DraftRow = ManuscriptDraftEvent & { _accept: boolean; _expand?: boolean };
+type DraftRow = ManuscriptDraftEvent & { _accept: boolean; _expand?: boolean; _showSource?: boolean };
 const reviewDraft = ref<DraftRow[]>([]);
 const committing = ref(false);
 const discarding = ref(false);
@@ -388,6 +388,16 @@ onUnmounted(stopPolling);
                           :title="`原稿地点 ${ev.location_name} 没有对应实体`">
                       原稿: {{ ev.location_name }}（未匹配）
                     </span>
+                    <button v-if="ev.source_context"
+                            type="button"
+                            class="text-xs text-muted hover:text-accent ml-auto"
+                            @click="ev._showSource = !ev._showSource">
+                      {{ ev._showSource ? '收起原文' : '🔍 原文' }}
+                    </button>
+                  </div>
+                  <div v-if="ev._showSource && ev.source_context"
+                       class="text-xs text-muted italic mt-1 p-2 bg-sunken/50 rounded leading-relaxed">
+                    {{ ev.source_context }}
                   </div>
                 </div>
               </li>

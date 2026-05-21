@@ -40,6 +40,7 @@ class DraftEvent:
     location_id: str | None
     tick: int                       # 由调用方分配
     causes: list[int] = field(default_factory=list)  # 上游事件的 tick 列表
+    source_context: str = ""  # 原文段落片段（审阅时对照用）
 
     def to_dict(self) -> dict:
         return {
@@ -54,6 +55,7 @@ class DraftEvent:
             "location_id":       self.location_id,
             "tick":              self.tick,
             "causes":            list(self.causes),
+            "source_context":    self.source_context,
         }
 
 
@@ -62,6 +64,14 @@ class ExtractResult:
     events: list[DraftEvent] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
+
+
+def _chapter_preview(text: str, max_chars: int = 200) -> str:
+    """截取章节开头作为审阅对照文本。"""
+    if not text: return ""
+    t = text.strip()[:max_chars]
+    if len(text.strip()) > max_chars: t += "…"
+    return t
 
 SYSTEM_PROMPT = """你是文学作品分析师。我会给你一部小说的若干连续章节，请抽出每章发生的关键事件。
 
@@ -196,6 +206,7 @@ def extract_events(
         # 按章序聚拢，再按 chapter_index 升序写出
         bucket: dict[int, list[DraftEvent]] = {}
         chapter_titles = {idx: title for idx, title, _ in batch}
+        chapter_texts = {idx: text for idx, _, text in batch}
 
         for raw in raw_events:
             if not isinstance(raw, dict):
@@ -250,7 +261,8 @@ def extract_events(
                 unresolved_names=unresolved,
                 location_name=location_name,
                 location_id=location_id,
-                tick=0,  # 待分配
+                tick=0,
+                source_context=_chapter_preview(chapter_texts.get(ch, "")),
             ))
 
         batch_events: list[DraftEvent] = []

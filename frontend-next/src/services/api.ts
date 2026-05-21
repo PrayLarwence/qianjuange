@@ -161,6 +161,7 @@ export interface ManuscriptDraftEvent {
   location_id: string | null;
   tick: number;
   causes?: number[];
+  source_context?: string;
 }
 
 export interface ManuscriptState {
