@@ -1,10 +1,11 @@
-"""LLM provider 配置相关 API。
+"""LLM provider 配置 / 度量 API。
 
-4 端点：
+5 端点：
 - GET  /llm_config
 - POST /llm_config
 - POST /llm_config/test
 - GET  /providers
+- GET  /metrics
 """
 from __future__ import annotations
 import logging
@@ -129,3 +130,20 @@ def list_providers():
         "available": list(PROVIDER_CLASSES.keys()),
         "models": {k: v.get("model") for k, v in cfg["providers"].items()},
     }
+
+
+# ─── 度量查询 ──────────────────────────────────────────────────
+
+@router.get("/metrics")
+def get_metrics(
+    hours: int = 24,
+    provider: str | None = None,
+    kind: str | None = None,
+):
+    from ..models import get_db, SessionLocal, LlmCallMetric
+    from ..engine.core.metrics import query_metrics
+    db = SessionLocal()
+    try:
+        return query_metrics(db, hours=hours, provider=provider, kind=kind)
+    finally:
+        db.close()

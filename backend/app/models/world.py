@@ -379,3 +379,19 @@ class AgentTrace(Base):
 
 
 Index("ix_agent_traces_job_seq", AgentTrace.job_id, AgentTrace.seq)
+
+
+class LlmCallMetric(Base):
+    """每次 LLM 调用的 token / 耗时记录。纯观测，不影响任何业务逻辑。"""
+    __tablename__ = "llm_call_metrics"
+    id = Column(String, primary_key=True)
+    provider = Column(String, nullable=False, index=True)    # claude|openai|deepseek|ollama
+    model = Column(String, nullable=False)                    # claude-opus-4-7 等
+    kind = Column(String, default="")                          # step|author|editor|consistency|ingest|…
+    world_id = Column(String, default="")                      # 关联世界（非必填）
+    tokens_in = Column(Integer, default=0)
+    tokens_out = Column(Integer, default=0)
+    latency_ms = Column(Integer, default=0)
+    status = Column(String, default="ok")                      # ok|error
+    error = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)

@@ -15,7 +15,7 @@ PROVIDER_CLASSES = {
 }
 
 
-def get_provider(name: str | None = None) -> LLMProvider:
+def get_provider(name: str | None = None, kind: str = "", world_id: str = "") -> LLMProvider:
     cfg = load_config()
     name = (name or cfg.get("active") or "claude").lower()
     cls = PROVIDER_CLASSES.get(name)
@@ -31,7 +31,9 @@ def get_provider(name: str | None = None) -> LLMProvider:
         kwargs["base_url"] = p["base_url"]
     if name == "ollama":
         kwargs.pop("api_key", None)
-    return cls(**kwargs)
+    inner = cls(**kwargs)
+    from .metrics_provider import MetricsProvider
+    return MetricsProvider(inner, kind=kind, world_id=world_id)
 
 
 def get_provider_for_role(world, role: str) -> LLMProvider:
