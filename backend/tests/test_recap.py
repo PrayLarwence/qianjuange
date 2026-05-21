@@ -28,7 +28,7 @@ def _add_chapter(db, branch_id: str, tick: int, title: str, summary: str = "", *
 # ---- _collect_chapter_text ----
 
 def test_collect_text_prefers_author_final(db, world_factory):
-    from app.engine.recap import _collect_chapter_text
+    from app.engine.narrative.recap import _collect_chapter_text
     w, br = world_factory()
     _add_log(db, br.id, 1, "粗稿1", role="director_draft")
     _add_log(db, br.id, 1, "定稿1", role="author_final")
@@ -42,7 +42,7 @@ def test_collect_text_prefers_author_final(db, world_factory):
 
 
 def test_collect_text_respects_range(db, world_factory):
-    from app.engine.recap import _collect_chapter_text
+    from app.engine.narrative.recap import _collect_chapter_text
     w, br = world_factory()
     _add_log(db, br.id, 1, "在范围内", role="narrator")
     _add_log(db, br.id, 10, "超出范围", role="narrator")
@@ -56,7 +56,7 @@ def test_collect_text_respects_range(db, world_factory):
 # ---- generate_chapter_summary ----
 
 def test_generate_summary_writes_back(db, world_factory):
-    from app.engine.recap import generate_chapter_summary
+    from app.engine.narrative.recap import generate_chapter_summary
     from tests.conftest import FakeProvider
     w, br = world_factory()
     _add_log(db, br.id, 1, "阿离踏出村庄走向北山。", role="narrator")
@@ -70,7 +70,7 @@ def test_generate_summary_writes_back(db, world_factory):
 
 
 def test_generate_summary_strips_prefix(db, world_factory):
-    from app.engine.recap import generate_chapter_summary
+    from app.engine.narrative.recap import generate_chapter_summary
     from tests.conftest import FakeProvider
     w, br = world_factory()
     _add_log(db, br.id, 1, "原文", role="narrator")
@@ -83,7 +83,7 @@ def test_generate_summary_strips_prefix(db, world_factory):
 
 
 def test_generate_summary_empty_chapter_returns_empty(db, world_factory):
-    from app.engine.recap import generate_chapter_summary
+    from app.engine.narrative.recap import generate_chapter_summary
     from tests.conftest import FakeProvider
     w, br = world_factory()
     cm = _add_chapter(db, br.id, 5, "空章")
@@ -98,7 +98,7 @@ def test_generate_summary_empty_chapter_returns_empty(db, world_factory):
 
 
 def test_generate_summary_llm_failure_returns_none(db, world_factory):
-    from app.engine.recap import generate_chapter_summary
+    from app.engine.narrative.recap import generate_chapter_summary
     w, br = world_factory()
     _add_log(db, br.id, 1, "原文", role="narrator")
     cm = _add_chapter(db, br.id, 5, "")
@@ -117,7 +117,7 @@ def test_generate_summary_llm_failure_returns_none(db, world_factory):
 # ---- regenerate_all_summaries ----
 
 def test_regenerate_all_processes_every_chapter(db, world_factory):
-    from app.engine.recap import regenerate_all_summaries
+    from app.engine.narrative.recap import regenerate_all_summaries
     from tests.conftest import FakeProvider
     w, br = world_factory()
     w.active_branch_id = br.id
@@ -137,7 +137,7 @@ def test_regenerate_all_processes_every_chapter(db, world_factory):
 
 
 def test_regenerate_all_only_missing_skips_existing(db, world_factory):
-    from app.engine.recap import regenerate_all_summaries
+    from app.engine.narrative.recap import regenerate_all_summaries
     from tests.conftest import FakeProvider
     w, br = world_factory()
     w.active_branch_id = br.id
@@ -158,13 +158,13 @@ def test_regenerate_all_only_missing_skips_existing(db, world_factory):
 # ---- build_chapter_recap_block ----
 
 def test_recap_block_empty_when_no_chapters(db, world_factory):
-    from app.engine.recap import build_chapter_recap_block
+    from app.engine.narrative.recap import build_chapter_recap_block
     w, br = world_factory()
     assert build_chapter_recap_block(db, w) == ""
 
 
 def test_recap_block_skips_empty_summary(db, world_factory):
-    from app.engine.recap import build_chapter_recap_block
+    from app.engine.narrative.recap import build_chapter_recap_block
     w, br = world_factory()
     _add_chapter(db, br.id, 1, "无摘要章")  # summary=""
     db.commit()
@@ -172,7 +172,7 @@ def test_recap_block_skips_empty_summary(db, world_factory):
 
 
 def test_recap_block_renders_in_tick_order(db, world_factory):
-    from app.engine.recap import build_chapter_recap_block
+    from app.engine.narrative.recap import build_chapter_recap_block
     w, br = world_factory()
     _add_chapter(db, br.id, 10, "晚章", summary="第二段。")
     _add_chapter(db, br.id, 3, "早章", summary="第一段。")
@@ -187,7 +187,7 @@ def test_recap_block_renders_in_tick_order(db, world_factory):
 
 
 def test_recap_block_disabled_via_rules(db, world_factory):
-    from app.engine.recap import build_chapter_recap_block
+    from app.engine.narrative.recap import build_chapter_recap_block
     w, br = world_factory(rules={"disable_chapter_recap": True})
     _add_chapter(db, br.id, 5, "章", summary="不该出现")
     db.commit()
@@ -197,8 +197,8 @@ def test_recap_block_disabled_via_rules(db, world_factory):
 # ---- _build_user_prompt 集成 ----
 
 def test_user_prompt_includes_recap_block(db, world_factory):
-    from app.engine.simulator import _build_user_prompt
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.simulator import _build_user_prompt
+    from app.engine.core.state import build_state_snapshot
     w, br = world_factory()
     _add_chapter(db, br.id, 5, "ch1", summary="阿离离开村庄。")
     db.commit()

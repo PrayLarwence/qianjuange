@@ -2,7 +2,7 @@
 from __future__ import annotations
 import pytest
 
-from app.engine.executor import execute_tool, ToolError
+from app.engine.core.executor import execute_tool, ToolError
 from app.models import Branch, Entity
 
 

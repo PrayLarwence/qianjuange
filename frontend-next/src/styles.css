@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg:      250 248 245;   /* warm off-white #faf8f5 */
+    --surface: 255 255 255;
+    --sunken:  244 240 233;
+    --border: 230 225 216;
+    --text:    31  28  24;    /* #1f1c18 */
+    --muted:  107 102  96;
+    --accent: 217 119  87;    /* #d97757 */
+  }
+  .dark {
+    --bg:       14  13  12;   /* #0e0d0c */
+    --surface:  26  24  22;   /* #1a1816 */
+    --sunken:   20  19  17;
+    --border:   42  39  36;
+    --text:    235 230 220;
+    --muted:   138 132 122;
+    --accent:  217 119  87;
+  }
+  html, body, #app { height: 100%; }
+  body {
+    background-color: rgb(var(--bg));
+    color: rgb(var(--text));
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    @apply font-sans;
+  }
+  ::selection { background: rgb(var(--accent) / 0.35); color: rgb(var(--text)); }
+  /* 自定义滚动条，让 editorial 一致感 */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--border));
+    border-radius: 6px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(var(--muted) / 0.5); }
+}
+
+@layer components {
+  .surface {
+    background-color: rgb(var(--surface));
+    border: 1px solid rgb(var(--border));
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 px-3 h-8 rounded text-sm transition-colors;
+    color: rgb(var(--text));
+  }
+  .btn:hover { background: rgb(var(--sunken)); }
+  .btn-accent {
+    background: rgb(var(--accent));
+    color: #fff;
+  }
+  .btn-accent:hover { filter: brightness(1.05); }
+  .btn-ghost {
+    color: rgb(var(--muted));
+  }
+  .btn-ghost:hover {
+    color: rgb(var(--text));
+    background: rgb(var(--sunken));
+  }
+  .input {
+    @apply w-full px-3 h-9 rounded text-sm;
+    background: rgb(var(--sunken));
+    border: 1px solid rgb(var(--border));
+    color: rgb(var(--text));
+  }
+  .input:focus {
+    outline: none;
+    border-color: rgb(var(--accent));
+  }
+  .nav-item {
+    @apply flex items-center gap-2 h-8 px-2 rounded text-sm transition-colors;
+    color: rgb(var(--muted));
+  }
+  .nav-item:hover {
+    color: rgb(var(--text));
+    background: rgb(var(--sunken));
+  }
+  .nav-item.is-active {
+    color: rgb(var(--text));
+    background: rgb(var(--sunken));
+    box-shadow: inset 2px 0 0 rgb(var(--accent));
+  }
+  .prose-serif {
+    @apply font-serif text-prose;
+  }
+}

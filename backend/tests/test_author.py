@@ -13,7 +13,7 @@
 from __future__ import annotations
 import pytest
 from app.models import NarrativeLog, StyleProfile, Event
-from app.engine.author import run_author_for_step
+from app.engine.agents.author import run_author_for_step
 from app.providers.base import LLMResponse
 
 
@@ -31,7 +31,7 @@ def _make_draft(db, branch_id, tick, text, idx=0):
 
 
 def _bind_style(db, world, style_id="style_jinyong"):
-    from app.engine.style_seeds import seed_builtin_styles
+    from app.engine.worldgen.style_seeds import seed_builtin_styles
     seed_builtin_styles(db)
     world.style_profile_id = style_id
     db.commit()
@@ -179,7 +179,7 @@ def test_author_merges_multiple_drafts(db, world_factory):
 def test_run_step_mock_does_not_call_author(db, world_factory, monkeypatch):
     """mock 模式跳过 Author 阶段，narrator 保持 narrator。"""
     monkeypatch.setenv("LLM_PROVIDER", "mock")
-    from app.engine.simulator import run_step
+    from app.engine.core.simulator import run_step
     w, br = world_factory()
     _bind_style(db, w)  # 即使绑了风格，mock 模式也不该跑 Author
     out = run_step(db, w, user_directive="测试推演")
@@ -235,7 +235,7 @@ def test_run_step_with_style_runs_author_pipeline(db, world_factory):
     最终 NarrativeLog 应有 1 director_draft + 1 author_final，
     run_step 返回的 narration 是 author 的输出。
     """
-    from app.engine.simulator import run_step
+    from app.engine.core.simulator import run_step
     from app.providers.base import ToolCall
 
     w, br = world_factory()
@@ -281,7 +281,7 @@ def test_run_step_with_style_runs_author_pipeline(db, world_factory):
 
 def test_run_step_with_style_author_failure_falls_back(db, world_factory):
     """Author 失败时，run_step 仍返回 narration（来自回落 final）。"""
-    from app.engine.simulator import run_step
+    from app.engine.core.simulator import run_step
     from app.providers.base import ToolCall
 
     w, br = world_factory()

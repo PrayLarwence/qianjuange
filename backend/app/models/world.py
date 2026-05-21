@@ -27,6 +27,9 @@ class World(Base):
     author_model_override = Column(String, default="")
     editor_model_override = Column(String, default="")
     reader_model_override = Column(String, default="")
+    manuscript_chunks = Column(JSON, default=list)
+    manuscript_draft_events = Column(JSON, default=list)
+    agent_pipeline = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     branches = relationship("Branch", back_populates="world", foreign_keys="Branch.world_id")
@@ -66,6 +69,8 @@ class Entity(Base):
     sim_state = Column(JSON, default=dict)
     persona = Column(JSON, default=dict)
     memories = Column(JSON, default=list)
+    tags = Column(JSON, default=list)
+    pinned = Column(Integer, default=0)
 
 
 class Event(Base):
@@ -157,6 +162,27 @@ Index("ix_plot_threads_branch_status", PlotThread.branch_id, PlotThread.status)
 
 
 Index("ix_chapter_markers_branch_tick", ChapterMarker.branch_id, ChapterMarker.tick)
+
+
+class WorldLore(Base):
+    """B3: 世界级长文本约束。跟 World.rules（结构化）正交。
+
+    每条 lore 是一段自由文本（背景设定、魔法系统、禁忌、文化等），
+    会按 priority 渲染进 Director 的 system prompt。
+    """
+    __tablename__ = "world_lore"
+    id = Column(String, primary_key=True)
+    world_id = Column(String, ForeignKey("worlds.id"), nullable=False, index=True)
+    category = Column(String, default="setting")  # 'setting'|'magic'|'taboo'|'culture'|'character'|'other'
+    title = Column(String, nullable=False)
+    content = Column(Text, default="")
+    priority = Column(Integer, default=0)         # 越大越靠前
+    pinned = Column(Integer, default=0)           # 0/1，pinned 不受 cap 限制
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+Index("ix_world_lore_world_priority", WorldLore.world_id, WorldLore.priority.desc())
 
 
 class WorldTemplate(Base):
@@ -302,3 +328,54 @@ class ChapterSummary(Base):
     word_count = Column(Integer, default=0)
     model_used = Column(String, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class IssuePatch(Base):
+    """Editor 针对某个 ConsistencyIssue 输出的具体文本 patch 建议。
+
+    工作流：scan → issue（已有）→ suggest_patch → 用户 apply/reject。
+    Apply 时直接改写 target 表（NarrativeLog.text / Event.title|description）
+    并把 status 推进到 applied。
+    """
+    __tablename__ = "issue_patches"
+    id = Column(String, primary_key=True)
+    issue_id = Column(String, ForeignKey("consistency_issues.id"), nullable=False, index=True)
+    target_kind = Column(String, nullable=False)  # 'narration' | 'event_title' | 'event_description'
+    target_id = Column(String, nullable=False)
+    before_excerpt = Column(Text, default="")  # 原文片段（用于校对/定位，可空）
+    after_text = Column(Text, default="")
+    rationale = Column(Text, default="")
+    status = Column(String, default="pending", index=True)  # pending|applied|rejected
+    model_used = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    applied_at = Column(DateTime, nullable=True)
+    # apply 前 target 字段的完整值快照，用于 undo
+    original_snapshot = Column(Text, default="")
+
+
+class AgentTrace(Base):
+    """Multi-agent orchestrator 单次调用的执行记录。
+    一次 step_orchestrated job 会写出 N 条：每个 director / author / critic 调用一条。
+    前端 AgentRunView 按 job_id 拉，按 seq 排序展示。
+    """
+    __tablename__ = "agent_traces"
+    id = Column(String, primary_key=True)
+    job_id = Column(String, nullable=False, index=True)
+    world_id = Column(String, ForeignKey("worlds.id"), nullable=False, index=True)
+    seq = Column(Integer, nullable=False)  # 同 job 内顺序
+    role = Column(String, nullable=False)  # director|author|critic|orchestrator
+    agent_name = Column(String, default="")  # 用户配置里的 name
+    iteration = Column(Integer, default=0)  # 第几轮（critic 打回重写时 ≥1）
+    model = Column(String, default="")
+    status = Column(String, default="running")  # running|done|error|cancelled
+    verdict = Column(String, default="")  # critic 用：pass|fail；其它空
+    input_summary = Column(Text, default="")
+    output_summary = Column(Text, default="")
+    full_prompt = Column(Text, default="")  # 折叠区展示，可能很大
+    full_response = Column(Text, default="")
+    extra = Column(JSON, default=dict)  # tokens/duration_ms/error_message 等
+    started_at = Column(DateTime, default=datetime.utcnow)
+    ended_at = Column(DateTime, nullable=True)
+
+
+Index("ix_agent_traces_job_seq", AgentTrace.job_id, AgentTrace.seq)

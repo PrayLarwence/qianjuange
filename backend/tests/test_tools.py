@@ -2,7 +2,7 @@
 from __future__ import annotations
 import pytest
 
-from app.engine.executor import execute_tool, ToolError
+from app.engine.core.executor import execute_tool, ToolError
 from app.models import Entity, Event, CausalLink, NarrativeLog
 
 
@@ -142,7 +142,7 @@ def test_end_turn_returns_ended(db, world_factory):
 
 def test_system_prompt_carries_writing_rules():
     """SYSTEM_PROMPT 必须明确要求 description 含动作/神态/心理与最低字数。"""
-    from app.engine.tools import SYSTEM_PROMPT
+    from app.engine.core.tools import SYSTEM_PROMPT
     # 关键词全部出现
     for kw in ("动作", "神态", "心理", "环境锚点", "80 字"):
         assert kw in SYSTEM_PROMPT, f"SYSTEM_PROMPT 缺少关键词: {kw}"
@@ -153,7 +153,7 @@ def test_system_prompt_carries_writing_rules():
 
 def test_add_event_tool_description_demands_prose():
     """add_event 的 description 字段说明应明确要求小说级文字 + 字数下限 + 反例。"""
-    from app.engine.tools import TOOL_SPECS
+    from app.engine.core.tools import TOOL_SPECS
     spec = next(t for t in TOOL_SPECS if t.name == "add_event")
     desc_field = spec.parameters["properties"]["description"]["description"]
     # 必须要求长度
@@ -167,7 +167,7 @@ def test_add_event_tool_description_demands_prose():
 
 def test_narrate_tool_description_promotes_usage():
     """narrate 工具说明应鼓励主动使用并给出节奏建议。"""
-    from app.engine.tools import TOOL_SPECS
+    from app.engine.core.tools import TOOL_SPECS
     spec = next(t for t in TOOL_SPECS if t.name == "narrate")
     assert "100" in spec.description  # 有字数提示
     assert "2-3" in spec.description or "关键节点" in spec.description
@@ -177,7 +177,7 @@ def test_narrate_tool_description_promotes_usage():
 
 def test_advance_outline_beat_tool_registered():
     """工具应注册并描述清楚触发条件 + no-op 行为。"""
-    from app.engine.tools import TOOL_SPECS
+    from app.engine.core.tools import TOOL_SPECS
     spec = next(t for t in TOOL_SPECS if t.name == "advance_outline_beat")
     assert "current_index" in spec.description
     assert "no-op" in spec.description.lower() or "noop" in spec.description.lower()
@@ -301,7 +301,7 @@ def test_advance_outline_beat_does_not_double_complete(db, world_factory):
 # ---- plot_threads ----
 
 def test_plot_thread_tools_registered():
-    from app.engine.tools import TOOL_SPECS
+    from app.engine.core.tools import TOOL_SPECS
     names = {t.name for t in TOOL_SPECS}
     assert "open_plot_thread" in names
     assert "close_plot_thread" in names
@@ -337,7 +337,7 @@ def test_open_plot_thread_creates_row_and_logs(db, world_factory):
 
 
 def test_open_plot_thread_requires_title_and_summary(db, world_factory):
-    from app.engine.executor import ToolError
+    from app.engine.core.executor import ToolError
     import pytest
     w, _ = world_factory()
     with pytest.raises(ToolError):
@@ -390,7 +390,7 @@ def test_close_plot_thread_noop_when_already_closed(db, world_factory):
 
 
 def test_state_snapshot_exposes_open_threads(db, world_factory):
-    from app.engine.state import build_state_snapshot, state_as_prompt
+    from app.engine.core.state import build_state_snapshot, state_as_prompt
     w, _ = world_factory()
     w.current_tick = 10
     db.commit()
@@ -409,7 +409,7 @@ def test_state_snapshot_exposes_open_threads(db, world_factory):
 
 
 def test_state_snapshot_omits_threads_section_when_none(db, world_factory):
-    from app.engine.state import build_state_snapshot, state_as_prompt
+    from app.engine.core.state import build_state_snapshot, state_as_prompt
     w, _ = world_factory()
     snap = build_state_snapshot(db, w)
     assert "open_plot_threads" not in snap
@@ -418,7 +418,7 @@ def test_state_snapshot_omits_threads_section_when_none(db, world_factory):
 
 
 def test_closed_threads_dont_appear_in_snapshot(db, world_factory):
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.state import build_state_snapshot
     w, _ = world_factory()
     o = execute_tool(db, w, "open_plot_thread", {"title": "a", "summary": "b"})
     execute_tool(db, w, "close_plot_thread", {"thread_id": o["id"]})
@@ -428,7 +428,7 @@ def test_closed_threads_dont_appear_in_snapshot(db, world_factory):
 
 def test_open_thread_age_marks_stale(db, world_factory):
     """钩子拖了 5+ tick 时 prompt 应注明'拖了 X tick 了'，让 LLM 注意。"""
-    from app.engine.state import build_state_snapshot, state_as_prompt
+    from app.engine.core.state import build_state_snapshot, state_as_prompt
     w, _ = world_factory()
     w.current_tick = 2
     db.commit()
@@ -443,7 +443,7 @@ def test_open_thread_age_marks_stale(db, world_factory):
 
 def test_system_prompt_documents_thread_workflow():
     """SYSTEM_PROMPT 应说明钩子的开 / 收工作流 + 修正第 1 条段落清单。"""
-    from app.engine.tools import SYSTEM_PROMPT
+    from app.engine.core.tools import SYSTEM_PROMPT
     assert "open_plot_thread" in SYSTEM_PROMPT
     assert "close_plot_thread" in SYSTEM_PROMPT
     assert "未收的剧情钩子" in SYSTEM_PROMPT  # 第 1 条段落清单已更新
@@ -464,7 +464,7 @@ def _bind_template(db, w, beats, current_index=0):
 
 
 def test_pacing_omitted_when_no_outline_and_no_threads(db, world_factory):
-    from app.engine.state import build_state_snapshot, state_as_prompt
+    from app.engine.core.state import build_state_snapshot, state_as_prompt
     w, _ = world_factory()
     snap = build_state_snapshot(db, w)
     assert "pacing_budget" not in snap
@@ -473,7 +473,7 @@ def test_pacing_omitted_when_no_outline_and_no_threads(db, world_factory):
 
 def test_pacing_untimed_when_threads_but_no_outline(db, world_factory):
     """无大纲但有钩子时仍提示注意，不让钩子无限累积。"""
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.state import build_state_snapshot
     w, _ = world_factory()
     execute_tool(db, w, "open_plot_thread", {"title": "t", "summary": "s"})
     snap = build_state_snapshot(db, w)
@@ -482,7 +482,7 @@ def test_pacing_untimed_when_threads_but_no_outline(db, world_factory):
 
 def test_pacing_critical_when_threads_exceed_remaining_beats(db, world_factory):
     """剩 1 拍但有 3 条钩子 → critical，prompt 必须出现'禁止开新钩子'。"""
-    from app.engine.state import build_state_snapshot, state_as_prompt
+    from app.engine.core.state import build_state_snapshot, state_as_prompt
     w, _ = world_factory()
     _bind_template(db, w, ["A", "B", "C"], current_index=2)  # 剩 1 拍
     for i in range(3):
@@ -498,7 +498,7 @@ def test_pacing_critical_when_threads_exceed_remaining_beats(db, world_factory):
 
 
 def test_pacing_endgame_when_all_done_with_open_threads(db, world_factory):
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.state import build_state_snapshot
     w, _ = world_factory()
     _bind_template(db, w, ["A", "B"], current_index=2)  # all_done
     execute_tool(db, w, "open_plot_thread", {"title": "t", "summary": "s"})
@@ -507,7 +507,7 @@ def test_pacing_endgame_when_all_done_with_open_threads(db, world_factory):
 
 
 def test_pacing_done_when_all_done_no_threads(db, world_factory):
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.state import build_state_snapshot
     w, _ = world_factory()
     _bind_template(db, w, ["A", "B"], current_index=2)
     snap = build_state_snapshot(db, w)
@@ -516,7 +516,7 @@ def test_pacing_done_when_all_done_no_threads(db, world_factory):
 
 def test_pacing_tight_when_late_with_many_threads(db, world_factory):
     """已推 60%+ 且有 3+ 钩子，但还没到剩拍 < 钩子的程度 → tight。"""
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.state import build_state_snapshot
     w, _ = world_factory()
     # 10 拍推到第 6 → 60%，剩 4 拍，开 3 条钩子（remaining > threads → 不会 critical）
     _bind_template(db, w, [f"b{i}" for i in range(10)], current_index=6)
@@ -529,7 +529,7 @@ def test_pacing_tight_when_late_with_many_threads(db, world_factory):
 
 def test_pacing_early_empty_nudges_to_open_threads(db, world_factory):
     """早期 0 钩子时给出'埋钩子'提示。"""
-    from app.engine.state import build_state_snapshot, state_as_prompt
+    from app.engine.core.state import build_state_snapshot, state_as_prompt
     w, _ = world_factory()
     _bind_template(db, w, [f"b{i}" for i in range(10)], current_index=1)  # 10%
     snap = build_state_snapshot(db, w)
@@ -538,7 +538,7 @@ def test_pacing_early_empty_nudges_to_open_threads(db, world_factory):
 
 
 def test_pacing_comfortable_default(db, world_factory):
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.state import build_state_snapshot
     w, _ = world_factory()
     _bind_template(db, w, [f"b{i}" for i in range(10)], current_index=3)  # 30%
     execute_tool(db, w, "open_plot_thread", {"title": "t", "summary": "s"})
@@ -548,7 +548,7 @@ def test_pacing_comfortable_default(db, world_factory):
 
 def test_pacing_section_renders_meta_line(db, world_factory):
     """'状态：' 行应该带上进度/剩拍/钩子数三个字段。"""
-    from app.engine.state import build_state_snapshot, state_as_prompt
+    from app.engine.core.state import build_state_snapshot, state_as_prompt
     w, _ = world_factory()
     _bind_template(db, w, ["a", "b", "c", "d"], current_index=2)
     execute_tool(db, w, "open_plot_thread", {"title": "t", "summary": "s"})

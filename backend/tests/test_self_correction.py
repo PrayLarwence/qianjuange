@@ -30,14 +30,14 @@ def _add_issue(db, branch_id: str, *, id: str, **kw):
 # ---- _build_self_correction_block ----
 
 def test_block_empty_when_no_issues(db, world_factory):
-    from app.engine.simulator import _build_self_correction_block
+    from app.engine.core.simulator import _build_self_correction_block
     w, br = world_factory()
     out = _build_self_correction_block(db, w)
     assert out == ""
 
 
 def test_block_renders_open_issues(db, world_factory):
-    from app.engine.simulator import _build_self_correction_block
+    from app.engine.core.simulator import _build_self_correction_block
     w, br = world_factory()
     _add_issue(db, br.id, id="i_1", title="阿离前后矛盾", description="前文沉默后文话痨",
                severity="high", category="personality")
@@ -52,7 +52,7 @@ def test_block_renders_open_issues(db, world_factory):
 
 
 def test_block_skips_non_open_status(db, world_factory):
-    from app.engine.simulator import _build_self_correction_block
+    from app.engine.core.simulator import _build_self_correction_block
     w, br = world_factory()
     _add_issue(db, br.id, id="i_a", title="已忽略问题", status="ignored")
     _add_issue(db, br.id, id="i_b", title="已解决问题", status="resolved")
@@ -63,7 +63,7 @@ def test_block_skips_non_open_status(db, world_factory):
 
 
 def test_block_severity_high_first(db, world_factory):
-    from app.engine.simulator import _build_self_correction_block
+    from app.engine.core.simulator import _build_self_correction_block
     w, br = world_factory()
     _add_issue(db, br.id, id="i_low", title="低优", severity="low", tick_end=10)
     _add_issue(db, br.id, id="i_high", title="高优", severity="high", tick_end=2)
@@ -79,7 +79,7 @@ def test_block_severity_high_first(db, world_factory):
 
 
 def test_block_caps_at_5_issues(db, world_factory):
-    from app.engine.simulator import _build_self_correction_block
+    from app.engine.core.simulator import _build_self_correction_block
     w, br = world_factory()
     for i in range(8):
         _add_issue(db, br.id, id=f"i_{i}", title=f"问题{i}", severity="medium")
@@ -92,7 +92,7 @@ def test_block_caps_at_5_issues(db, world_factory):
 
 
 def test_block_disabled_via_world_rules(db, world_factory):
-    from app.engine.simulator import _build_self_correction_block
+    from app.engine.core.simulator import _build_self_correction_block
     w, br = world_factory(rules={"disable_self_correction": True})
     _add_issue(db, br.id, id="i_x", title="不该出现", severity="high")
     db.commit()
@@ -102,7 +102,7 @@ def test_block_disabled_via_world_rules(db, world_factory):
 
 
 def test_block_truncates_long_text(db, world_factory):
-    from app.engine.simulator import _build_self_correction_block
+    from app.engine.core.simulator import _build_self_correction_block
     w, br = world_factory()
     long_desc = "X" * 500
     long_sug = "Y" * 500
@@ -117,7 +117,7 @@ def test_block_truncates_long_text(db, world_factory):
 
 def test_block_only_current_branch(db, world_factory):
     """另一 branch 的 issue 不应泄露到本 branch 的 prompt 里。"""
-    from app.engine.simulator import _build_self_correction_block
+    from app.engine.core.simulator import _build_self_correction_block
     from app.models import Branch
     import uuid
     w, br = world_factory()
@@ -135,8 +135,8 @@ def test_block_only_current_branch(db, world_factory):
 # ---- _build_user_prompt 集成 ----
 
 def test_user_prompt_includes_feedback_block(db, world_factory):
-    from app.engine.simulator import _build_user_prompt
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.simulator import _build_user_prompt
+    from app.engine.core.state import build_state_snapshot
     w, br = world_factory()
     _add_issue(db, br.id, id="i_p", title="某问题", severity="high")
     db.commit()
@@ -148,8 +148,8 @@ def test_user_prompt_includes_feedback_block(db, world_factory):
 
 
 def test_user_prompt_no_feedback_when_disabled(db, world_factory):
-    from app.engine.simulator import _build_user_prompt
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.simulator import _build_user_prompt
+    from app.engine.core.state import build_state_snapshot
     w, br = world_factory(rules={"disable_self_correction": True})
     _add_issue(db, br.id, id="i_q", title="不该出现的问题", severity="high")
     db.commit()

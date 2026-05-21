@@ -73,13 +73,13 @@ class FakeProvider:
 
 def _patch_provider(monkeypatch, provider):
     from app.engine import consistency
-    monkeypatch.setattr(consistency, "get_provider", lambda _=None: provider)
+    monkeypatch.setattr(consistency.consistency, "get_provider", lambda _=None: provider)
 
 
 # ---- run_editor_for_chapter ----
 
 def test_run_editor_writes_critique_log_and_issues(db, world_factory, monkeypatch):
-    from app.engine.editor import run_editor_for_chapter
+    from app.engine.agents.editor import run_editor_for_chapter
     w, br, cm = _make_branch_state(db, world_factory)
     fake = FakeProvider()
     _patch_provider(monkeypatch, fake)
@@ -103,7 +103,7 @@ def test_run_editor_writes_critique_log_and_issues(db, world_factory, monkeypatc
 
 
 def test_run_editor_second_chapter_uses_correct_range(db, world_factory, monkeypatch):
-    from app.engine.editor import run_editor_for_chapter
+    from app.engine.agents.editor import run_editor_for_chapter
     w, br, _ = _make_branch_state(db, world_factory)
     cm2 = ChapterMarker(id="ch_2", branch_id=br.id, tick=6, title="第二回")
     db.add(cm2); db.commit()
@@ -123,7 +123,7 @@ def test_run_editor_second_chapter_uses_correct_range(db, world_factory, monkeyp
 
 
 def test_run_editor_replaces_old_critique_on_rerun(db, world_factory, monkeypatch):
-    from app.engine.editor import run_editor_for_chapter
+    from app.engine.agents.editor import run_editor_for_chapter
     w, br, cm = _make_branch_state(db, world_factory)
 
     _patch_provider(monkeypatch, FakeProvider())
@@ -142,14 +142,14 @@ def test_run_editor_replaces_old_critique_on_rerun(db, world_factory, monkeypatc
 
 
 def test_run_editor_handles_provider_failure_gracefully(db, world_factory, monkeypatch):
-    from app.engine.editor import run_editor_for_chapter
+    from app.engine.agents.editor import run_editor_for_chapter
     from app.engine import consistency
     w, br, cm = _make_branch_state(db, world_factory)
 
     class Boom:
         def chat(self, **k):
             raise RuntimeError("LLM 挂了")
-    monkeypatch.setattr(consistency, "get_provider", lambda _=None: Boom())
+    monkeypatch.setattr(consistency.consistency, "get_provider", lambda _=None: Boom())
 
     res = run_editor_for_chapter(db, w, cm)
 
@@ -164,7 +164,7 @@ def test_run_editor_handles_provider_failure_gracefully(db, world_factory, monke
 # ---- get_chapter_critique ----
 
 def test_get_critique_before_run_returns_empty(db, world_factory):
-    from app.engine.editor import get_chapter_critique
+    from app.engine.agents.editor import get_chapter_critique
     w, br, cm = _make_branch_state(db, world_factory)
     out = get_chapter_critique(db, cm)
     assert out["has_critique"] is False
@@ -173,7 +173,7 @@ def test_get_critique_before_run_returns_empty(db, world_factory):
 
 
 def test_get_critique_after_run_returns_text_and_issues(db, world_factory, monkeypatch):
-    from app.engine.editor import run_editor_for_chapter, get_chapter_critique
+    from app.engine.agents.editor import run_editor_for_chapter, get_chapter_critique
     w, br, cm = _make_branch_state(db, world_factory)
     _patch_provider(monkeypatch, FakeProvider())
     run_editor_for_chapter(db, w, cm)

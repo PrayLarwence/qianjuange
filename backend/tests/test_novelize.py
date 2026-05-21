@@ -1,8 +1,8 @@
 """novelize 测试 —— 重点测 list_chapters 切片逻辑（纯函数，无 LLM）。"""
 from __future__ import annotations
 
-from app.engine.executor import execute_tool
-from app.engine.novelize import (
+from app.engine.core.executor import execute_tool
+from app.engine.narrative.novelize import (
     list_chapters,
     STRATEGY_SINGLE, STRATEGY_BY_TICK, STRATEGY_BY_COUNT, STRATEGY_MANUAL,
 )

@@ -2,7 +2,8 @@ from .db import Base, engine, SessionLocal, get_db, init_db
 from .world import (
     World, Branch, Entity, Event, CausalLink, Snapshot, NarrativeLog,
     ChapterMarker, WorldTemplate, ConsistencyIssue, ScanRun, PlotThread,
-    StyleProfile, EntitySnapshot, EmbeddingChunk, ChapterSummary,
+    StyleProfile, EntitySnapshot, EmbeddingChunk, ChapterSummary, WorldLore,
+    IssuePatch, AgentTrace,
 )
 
 __all__ = [
@@ -11,4 +12,5 @@ __all__ = [
     "ChapterMarker", "WorldTemplate", "PlotThread",
     "ConsistencyIssue", "ScanRun",
     "StyleProfile", "EntitySnapshot", "EmbeddingChunk", "ChapterSummary",
+    "WorldLore", "IssuePatch", "AgentTrace",
 ]

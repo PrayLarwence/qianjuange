@@ -1,7 +1,7 @@
 """引擎纯函数测试 —— 不依赖 DB / LLM。"""
 from __future__ import annotations
 
-from app.engine.state import _entity_for_prompt
+from app.engine.core.state import _entity_for_prompt
 
 
 def test_prompt_drops_empty_summary():
@@ -63,7 +63,7 @@ def test_prompt_status_blocked_kept():
 
 def test_build_state_snapshot_minimal(db, world_factory):
     """落库一个空世界后，build_state_snapshot 应给出合法 shape。"""
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.state import build_state_snapshot
     w, _ = world_factory(name="空世界")
     snap = build_state_snapshot(db, w)
     assert snap["world"]["id"] == w.id
@@ -74,7 +74,7 @@ def test_build_state_snapshot_minimal(db, world_factory):
 
 
 def test_build_state_snapshot_with_entity(db, world_factory):
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.state import build_state_snapshot
     from app.models import Entity
     w, br = world_factory(name="有人世界")
     db.add(Entity(id="e1", branch_id=br.id, type="character",
@@ -87,7 +87,7 @@ def test_build_state_snapshot_with_entity(db, world_factory):
 
 
 def test_build_state_snapshot_skips_dead(db, world_factory):
-    from app.engine.state import build_state_snapshot
+    from app.engine.core.state import build_state_snapshot
     from app.models import Entity
     w, br = world_factory()
     db.add(Entity(id="dead", branch_id=br.id, type="character",
@@ -150,7 +150,7 @@ def test_prompt_drops_empty_persona_subfields():
 
 def test_state_as_prompt_emits_persona_quickref():
     """有 persona 的角色应出现在'角色人格速查'独立章节里。"""
-    from app.engine.state import state_as_prompt
+    from app.engine.core.state import state_as_prompt
     snap = {
         "world": {"name": "测试世界", "description": "", "current_tick": 0,
                   "outline": "", "rules": {}},
@@ -175,7 +175,7 @@ def test_state_as_prompt_emits_persona_quickref():
 
 def test_state_as_prompt_no_quickref_when_no_persona():
     """全部角色都没 persona 时，速查章节不应出现。"""
-    from app.engine.state import state_as_prompt
+    from app.engine.core.state import state_as_prompt
     snap = {
         "world": {"name": "x", "description": "", "current_tick": 0,
                   "outline": "", "rules": {}},
@@ -192,7 +192,7 @@ def test_state_as_prompt_no_quickref_when_no_persona():
 
 def test_load_outline_block_no_template(db, world_factory):
     """没绑定模板的世界返回 None，prompt 不会出现剧情进度章节。"""
-    from app.engine.state import _load_outline_block, build_state_snapshot, state_as_prompt
+    from app.engine.core.state import _load_outline_block, build_state_snapshot, state_as_prompt
     w, _ = world_factory()
     assert _load_outline_block(db, w) is None
     snap = build_state_snapshot(db, w)
@@ -202,7 +202,7 @@ def test_load_outline_block_no_template(db, world_factory):
 
 def test_load_outline_block_with_template_and_progress(db, world_factory):
     """绑模板 + 有进度时正常返回，含 current_beat / upcoming / completed。"""
-    from app.engine.state import _load_outline_block
+    from app.engine.core.state import _load_outline_block
     from app.models import WorldTemplate
     import uuid
     t = WorldTemplate(
@@ -235,7 +235,7 @@ def test_load_outline_block_with_template_and_progress(db, world_factory):
 
 def test_load_outline_block_clamp_overflow(db, world_factory):
     """current_index 超出范围时应 clamp 到末尾，all_done=True。"""
-    from app.engine.state import _load_outline_block
+    from app.engine.core.state import _load_outline_block
     from app.models import WorldTemplate
     import uuid
     t = WorldTemplate(id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
@@ -252,7 +252,7 @@ def test_load_outline_block_clamp_overflow(db, world_factory):
 
 def test_load_outline_block_empty_outline(db, world_factory):
     """模板存在但 canonical_outline 空 → 返回 None。"""
-    from app.engine.state import _load_outline_block
+    from app.engine.core.state import _load_outline_block
     from app.models import WorldTemplate
     import uuid
     t = WorldTemplate(id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
@@ -266,7 +266,7 @@ def test_load_outline_block_empty_outline(db, world_factory):
 
 def test_load_outline_block_accepts_string_beats(db, world_factory):
     """outline 里允许是字符串 list 而不是 dict list。"""
-    from app.engine.state import _load_outline_block
+    from app.engine.core.state import _load_outline_block
     from app.models import WorldTemplate
     import uuid
     t = WorldTemplate(id=f"t_{uuid.uuid4().hex[:8]}", name="x", description="",
@@ -282,7 +282,7 @@ def test_load_outline_block_accepts_string_beats(db, world_factory):
 
 def test_state_as_prompt_renders_outline_progress():
     """剧情进度章节渲染时应高亮当前节拍并标注完成/当前/未开始。"""
-    from app.engine.state import state_as_prompt
+    from app.engine.core.state import state_as_prompt
     snap = {
         "world": {"name": "x", "description": "", "current_tick": 0,
                   "outline": "", "rules": {}},
@@ -315,7 +315,7 @@ def test_state_as_prompt_renders_outline_progress():
 
 def test_state_as_prompt_renders_all_done():
     """全部完成时章节应说明，并不再显示 current_beat。"""
-    from app.engine.state import state_as_prompt
+    from app.engine.core.state import state_as_prompt
     snap = {
         "world": {"name": "x", "description": "", "current_tick": 0,
                   "outline": "", "rules": {}},
@@ -349,7 +349,7 @@ def _char_dict(eid: str, name: str, mems: list[dict]) -> dict:
 
 def test_entity_for_prompt_emits_memories_filtered_by_recent_events():
     """memories 应过滤掉 recent_events 已覆盖的 event_id，避免重复占 token。"""
-    from app.engine.state import _entity_for_prompt
+    from app.engine.core.state import _entity_for_prompt
     e = _char_dict("c1", "甲", [
         {"event_id": "ev_old1", "tick": 1, "summary": "旧事一", "certainty": "experienced"},
         {"event_id": "ev_recent", "tick": 5, "summary": "近事", "certainty": "experienced"},
@@ -364,7 +364,7 @@ def test_entity_for_prompt_emits_memories_filtered_by_recent_events():
 
 def test_entity_for_prompt_dedupes_same_event_id():
     """同一 event_id 多条 memory（参与+observe）只保留一条。"""
-    from app.engine.state import _entity_for_prompt
+    from app.engine.core.state import _entity_for_prompt
     e = _char_dict("c1", "甲", [
         {"event_id": "ev1", "tick": 1, "summary": "我经历的", "certainty": "experienced"},
         {"event_id": "ev1", "tick": 1, "summary": "我观察的", "certainty": "observed"},
@@ -378,7 +378,7 @@ def test_entity_for_prompt_dedupes_same_event_id():
 
 def test_entity_for_prompt_caps_at_per_char_limit():
     """超过 MEMORY_PER_CHAR_LIMIT 应截最近 N 条。"""
-    from app.engine.state import _entity_for_prompt, MEMORY_PER_CHAR_LIMIT
+    from app.engine.core.state import _entity_for_prompt, MEMORY_PER_CHAR_LIMIT
     mems = [{"event_id": f"e{i}", "tick": i, "summary": f"事{i}",
              "certainty": "experienced"} for i in range(MEMORY_PER_CHAR_LIMIT + 5)]
     e = _char_dict("c1", "甲", mems)
@@ -393,7 +393,7 @@ def test_entity_for_prompt_caps_at_per_char_limit():
 
 def test_entity_for_prompt_skips_memories_for_non_character():
     """非 character 实体不应有 memories 字段。"""
-    from app.engine.state import _entity_for_prompt
+    from app.engine.core.state import _entity_for_prompt
     e = {
         "id": "loc1", "type": "location", "name": "酒馆",
         "summary": "", "attributes": {}, "state": {},
@@ -405,7 +405,7 @@ def test_entity_for_prompt_skips_memories_for_non_character():
 
 def test_entity_for_prompt_no_memories_when_none_recorded():
     """memories 列表为空时不输出 memories 字段。"""
-    from app.engine.state import _entity_for_prompt
+    from app.engine.core.state import _entity_for_prompt
     e = _char_dict("c1", "甲", [])
     out = _entity_for_prompt(e, recent_event_ids=set())
     assert "memories" not in out
@@ -413,7 +413,7 @@ def test_entity_for_prompt_no_memories_when_none_recorded():
 
 def test_entity_for_prompt_no_memories_when_recent_event_ids_none():
     """没传 recent_event_ids 时（向后兼容），不输出 memories。"""
-    from app.engine.state import _entity_for_prompt
+    from app.engine.core.state import _entity_for_prompt
     e = _char_dict("c1", "甲", [
         {"event_id": "e1", "tick": 1, "summary": "x", "certainty": "experienced"},
     ])
@@ -423,7 +423,7 @@ def test_entity_for_prompt_no_memories_when_recent_event_ids_none():
 
 def test_state_as_prompt_includes_long_term_memories(db, world_factory):
     """端到端：建一个角色 + 一些 memories，state_as_prompt 实体段应含历史摘要。"""
-    from app.engine.state import build_state_snapshot, state_as_prompt
+    from app.engine.core.state import build_state_snapshot, state_as_prompt
     from app.models import Entity
     import uuid
     w, br = world_factory()

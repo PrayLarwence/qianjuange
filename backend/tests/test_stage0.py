@@ -50,7 +50,7 @@ def test_narrative_log_new_fields(db, world_factory):
 # ===== StyleProfile seed =====
 
 def test_seed_builtin_styles_inserts_eight(db):
-    from app.engine.style_seeds import seed_builtin_styles, BUILTIN_PROFILES
+    from app.engine.worldgen.style_seeds import seed_builtin_styles, BUILTIN_PROFILES
     n = seed_builtin_styles(db)
     assert n == len(BUILTIN_PROFILES) == 8
     rows = db.query(StyleProfile).filter_by(kind="builtin").all()
@@ -68,7 +68,7 @@ def test_seed_builtin_styles_inserts_eight(db):
 
 def test_seed_builtin_styles_idempotent(db):
     """重复调用应 upsert，不重复插入。"""
-    from app.engine.style_seeds import seed_builtin_styles
+    from app.engine.worldgen.style_seeds import seed_builtin_styles
     seed_builtin_styles(db)
     seed_builtin_styles(db)  # 第二次
     seed_builtin_styles(db)  # 第三次
@@ -78,7 +78,7 @@ def test_seed_builtin_styles_idempotent(db):
 
 def test_seed_updates_existing_spec(db):
     """已有 builtin 时再 seed 应更新 spec_text，不创建副本。"""
-    from app.engine.style_seeds import seed_builtin_styles
+    from app.engine.worldgen.style_seeds import seed_builtin_styles
     seed_builtin_styles(db)
     # 篡改一条
     one = db.query(StyleProfile).filter_by(id="style_jinyong").first()
@@ -170,7 +170,7 @@ def _add_draft(db, branch_id, tick, idx=0, role="director_draft"):
 
 
 def test_cleanup_keeps_recent_three_distinct_ticks(db, world_factory):
-    from app.engine.draft_cleanup import cleanup_old_drafts
+    from app.engine.narrative.draft_cleanup import cleanup_old_drafts
     _, br = world_factory()
     for t in [1, 2, 3, 4, 5]:
         _add_draft(db, br.id, t)
@@ -185,7 +185,7 @@ def test_cleanup_keeps_recent_three_distinct_ticks(db, world_factory):
 
 def test_cleanup_groups_by_tick_not_count(db, world_factory):
     """同一 tick 多条草稿都该保留——按 distinct tick 数算 retention。"""
-    from app.engine.draft_cleanup import cleanup_old_drafts
+    from app.engine.narrative.draft_cleanup import cleanup_old_drafts
     _, br = world_factory()
     # tick 1 有 3 条草稿；tick 2/3/4 各 1 条
     for i in range(3):
@@ -202,7 +202,7 @@ def test_cleanup_groups_by_tick_not_count(db, world_factory):
 
 
 def test_cleanup_noop_when_under_retention(db, world_factory):
-    from app.engine.draft_cleanup import cleanup_old_drafts
+    from app.engine.narrative.draft_cleanup import cleanup_old_drafts
     _, br = world_factory()
     for t in [1, 2]:
         _add_draft(db, br.id, t)
@@ -213,7 +213,7 @@ def test_cleanup_noop_when_under_retention(db, world_factory):
 
 def test_cleanup_does_not_touch_other_roles(db, world_factory):
     """清理 director_draft 时不能误删 author_final。"""
-    from app.engine.draft_cleanup import cleanup_old_drafts
+    from app.engine.narrative.draft_cleanup import cleanup_old_drafts
     _, br = world_factory()
     for t in [1, 2, 3, 4, 5]:
         _add_draft(db, br.id, t, role="director_draft")
@@ -226,7 +226,7 @@ def test_cleanup_does_not_touch_other_roles(db, world_factory):
 
 
 def test_cleanup_reader_feedback_keeps_latest_one(db, world_factory):
-    from app.engine.draft_cleanup import cleanup_old_reader_feedback
+    from app.engine.narrative.draft_cleanup import cleanup_old_reader_feedback
     _, br = world_factory()
     for t in [1, 2, 3]:
         _add_draft(db, br.id, t, role="reader_feedback")

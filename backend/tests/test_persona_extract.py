@@ -3,35 +3,35 @@ from __future__ import annotations
 import pytest
 
 from app.providers.base import LLMResponse
-from app.engine.executor import execute_tool
+from app.engine.core.executor import execute_tool
 
 
 # ---- _parse_json_object ----
 
 def test_parse_json_naked_object():
-    from app.engine.persona_extract import _parse_json_object
+    from app.engine.narrative.persona_extract import _parse_json_object
     assert _parse_json_object('{"a": 1}') == {"a": 1}
 
 
 def test_parse_json_with_fence():
-    from app.engine.persona_extract import _parse_json_object
+    from app.engine.narrative.persona_extract import _parse_json_object
     assert _parse_json_object('```json\n{"a": 1}\n```') == {"a": 1}
 
 
 def test_parse_json_with_preamble():
-    from app.engine.persona_extract import _parse_json_object
+    from app.engine.narrative.persona_extract import _parse_json_object
     # 前面有废话也能找出来
     assert _parse_json_object('好的，我的回答是：{"x": "y"}') == {"x": "y"}
 
 
 def test_parse_json_returns_none():
-    from app.engine.persona_extract import _parse_json_object
+    from app.engine.narrative.persona_extract import _parse_json_object
     assert _parse_json_object("") is None
     assert _parse_json_object("纯文本无对象") is None
 
 
 def test_parse_json_handles_nested():
-    from app.engine.persona_extract import _parse_json_object
+    from app.engine.narrative.persona_extract import _parse_json_object
     s = '{"a": {"b": [1, 2]}, "c": "ok"}'
     assert _parse_json_object(s) == {"a": {"b": [1, 2]}, "c": "ok"}
 
@@ -39,23 +39,23 @@ def test_parse_json_handles_nested():
 # ---- _as_str_list ----
 
 def test_as_str_list_from_list():
-    from app.engine.persona_extract import _as_str_list
+    from app.engine.narrative.persona_extract import _as_str_list
     assert _as_str_list(["a", "b"], 5) == ["a", "b"]
 
 
 def test_as_str_list_from_csv_string():
-    from app.engine.persona_extract import _as_str_list
+    from app.engine.narrative.persona_extract import _as_str_list
     assert _as_str_list("a, b, c", 5) == ["a", "b", "c"]
 
 
 def test_as_str_list_dedup_and_truncate():
-    from app.engine.persona_extract import _as_str_list
+    from app.engine.narrative.persona_extract import _as_str_list
     out = _as_str_list(["a", "a", "b", "c", "d"], 2)
     assert out == ["a", "b"]
 
 
 def test_as_str_list_empty_inputs():
-    from app.engine.persona_extract import _as_str_list
+    from app.engine.narrative.persona_extract import _as_str_list
     assert _as_str_list(None, 3) == []
     assert _as_str_list("", 3) == []
     assert _as_str_list({}, 3) == []  # 非 list 非 str
@@ -64,7 +64,7 @@ def test_as_str_list_empty_inputs():
 # ---- extract_persona 早返与解析 ----
 
 def test_extract_persona_unknown_entity(db, world_factory):
-    from app.engine.persona_extract import extract_persona
+    from app.engine.narrative.persona_extract import extract_persona
     w, _ = world_factory()
     with pytest.raises(ValueError):
         extract_persona(db, "ent_nope")
@@ -72,7 +72,7 @@ def test_extract_persona_unknown_entity(db, world_factory):
 
 def test_extract_persona_too_few_events(db, world_factory):
     """事件少于 2 时不调 LLM。"""
-    from app.engine.persona_extract import extract_persona
+    from app.engine.narrative.persona_extract import extract_persona
     w, _ = world_factory()
     eid = execute_tool(db, w, "create_entity", {"type": "character", "name": "孤鸟"})["id"]
 
@@ -89,7 +89,7 @@ def test_extract_persona_too_few_events(db, world_factory):
 
 def test_extract_persona_parses_llm_output(db, world_factory):
     """LLM 返回有效 JSON 时，归一化到 suggestion。"""
-    from app.engine.persona_extract import extract_persona
+    from app.engine.narrative.persona_extract import extract_persona
     w, _ = world_factory()
     eid = execute_tool(db, w, "create_entity", {"type": "character", "name": "主角"})["id"]
     # 至少 2 个相关事件
@@ -124,7 +124,7 @@ def test_extract_persona_parses_llm_output(db, world_factory):
 
 def test_extract_persona_unparseable_llm(db, world_factory):
     """LLM 返回非 JSON 时，应优雅降级返回 ok=False。"""
-    from app.engine.persona_extract import extract_persona
+    from app.engine.narrative.persona_extract import extract_persona
     w, _ = world_factory()
     eid = execute_tool(db, w, "create_entity", {"type": "character", "name": "主角"})["id"]
     for i in range(2):
@@ -143,7 +143,7 @@ def test_extract_persona_unparseable_llm(db, world_factory):
 
 def test_extract_persona_accepts_canonical_key(db, world_factory):
     """LLM 直接吐 knowledge_blindspots 也应被接受（不依赖 fallback）。"""
-    from app.engine.persona_extract import extract_persona
+    from app.engine.narrative.persona_extract import extract_persona
     w, _ = world_factory()
     eid = execute_tool(db, w, "create_entity", {"type": "character", "name": "x"})["id"]
     for _ in range(2):
@@ -164,7 +164,7 @@ def test_extract_persona_accepts_canonical_key(db, world_factory):
 
 def test_view_as_prompt_emphasizes_persona():
     """view_as_prompt 应把 drives / voice / blindspots 抬到约束位置。"""
-    from app.engine.character_view import view_as_prompt
+    from app.engine.agents.character_view import view_as_prompt
     view = {
         "viewer": {
             "name": "甲", "summary": "测试角色",
@@ -191,7 +191,7 @@ def test_view_as_prompt_emphasizes_persona():
 
 def test_view_as_prompt_handles_missing_persona():
     """没填 persona 时也不该崩，且应给 LLM 兜底说明。"""
-    from app.engine.character_view import view_as_prompt
+    from app.engine.agents.character_view import view_as_prompt
     view = {
         "viewer": {
             "name": "无人格", "summary": "x",
@@ -210,7 +210,7 @@ def test_view_as_prompt_handles_missing_persona():
 
 def test_extract_persona_llm_exception_is_caught(db, world_factory):
     """provider.chat 抛异常时 extract_persona 不应崩。"""
-    from app.engine.persona_extract import extract_persona
+    from app.engine.narrative.persona_extract import extract_persona
     w, _ = world_factory()
     eid = execute_tool(db, w, "create_entity", {"type": "character", "name": "主角"})["id"]
     for i in range(2):

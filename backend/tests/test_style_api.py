@@ -5,7 +5,7 @@ from app.models import StyleProfile, World
 
 
 def _seed(db):
-    from app.engine.style_seeds import seed_builtin_styles
+    from app.engine.worldgen.style_seeds import seed_builtin_styles
     seed_builtin_styles(db)
 
 

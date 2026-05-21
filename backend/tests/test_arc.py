@@ -6,7 +6,7 @@
 from __future__ import annotations
 import uuid
 
-from app.models import Entity, Event, CausalLink, ConsistencyIssue
+from app.models import Entity, Event, CausalLink, ConsistencyIssue, PlotThread
 
 
 def _add_entity(db, branch_id, name, type_="character", **kw):
@@ -147,3 +147,55 @@ def test_arc_stats_when_no_events(client, db, world_factory):
     assert data["stats"]["first_tick"] is None
     assert data["stats"]["event_count"] == 0
     assert data["open_issues"] == []
+
+
+# ---- B5: open threads ----
+
+def _add_thread(db, branch_id, title, related, status="open", opened_tick=0, summary=""):
+    th = PlotThread(
+        id=f"pt_{uuid.uuid4().hex[:8]}",
+        branch_id=branch_id, title=title, summary=summary,
+        status=status, opened_tick=opened_tick,
+        related_entity_ids=related,
+    )
+    db.add(th); db.flush()
+    return th
+
+
+def test_arc_includes_open_threads_for_this_entity(client, db, world_factory):
+    w, br = world_factory()
+    a = _add_entity(db, br.id, "阿离")
+    b = _add_entity(db, br.id, "老掌柜")
+    _add_thread(db, br.id, "北山的师父", related=[a.id], opened_tick=3, summary="谁是真师父？")
+    _add_thread(db, br.id, "B 自己的债", related=[b.id], opened_tick=2)
+    db.commit()
+
+    data = client.get(f"/api/entities/{a.id}/arc").json()
+    threads = data["open_threads"]
+    assert len(threads) == 1
+    assert threads[0]["title"] == "北山的师父"
+    assert threads[0]["summary"] == "谁是真师父？"
+    assert data["stats"]["open_thread_count"] == 1
+
+
+def test_arc_skips_closed_threads(client, db, world_factory):
+    w, br = world_factory()
+    a = _add_entity(db, br.id, "阿离")
+    _add_thread(db, br.id, "已收尾", related=[a.id], status="closed")
+    _add_thread(db, br.id, "未收尾", related=[a.id], status="open")
+    db.commit()
+
+    titles = [t["title"] for t in client.get(f"/api/entities/{a.id}/arc").json()["open_threads"]]
+    assert titles == ["未收尾"]
+
+
+def test_arc_threads_sorted_by_recency(client, db, world_factory):
+    w, br = world_factory()
+    a = _add_entity(db, br.id, "阿离")
+    _add_thread(db, br.id, "早", related=[a.id], opened_tick=1)
+    _add_thread(db, br.id, "晚", related=[a.id], opened_tick=10)
+    _add_thread(db, br.id, "中", related=[a.id], opened_tick=5)
+    db.commit()
+
+    titles = [t["title"] for t in client.get(f"/api/entities/{a.id}/arc").json()["open_threads"]]
+    assert titles == ["晚", "中", "早"]

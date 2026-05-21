@@ -5,16 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Narrative Sandbox · 叙事推演沙盒</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%2310b981'/%3E%3Cpath d='M16 22h32M16 32h24M16 42h28' stroke='%23052e16' stroke-width='4' stroke-linecap='round'/%3E%3Ccircle cx='52' cy='32' r='4' fill='%23fef3c7'/%3E%3C/svg%3E" />
-<script src="https://cdn.tailwindcss.com"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vis-timeline@7.7.3/styles/vis-timeline-graph2d.min.css">
-<script src="https://cdn.jsdelivr.net/npm/vis-timeline@7.7.3/standalone/umd/vis-timeline-graph2d.min.js"></script>
+<script src="/static/vendor/tailwind.js"></script>
+<script defer src="/static/vendor/alpine.min.js"></script>
+<script src="/static/vendor/cytoscape.min.js"></script>
+<script src="/static/vendor/dagre.min.js"></script>
+<script src="/static/vendor/cytoscape-dagre.min.js"></script>
+<link rel="stylesheet" href="/static/vendor/vis-timeline.min.css">
+<script src="/static/vendor/vis-timeline.min.js"></script>
 <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body class="text-zinc-100 font-sans" x-data="sandbox()" x-init="init()" @click="toolMenuOpen=false">
+
+<div style="background:#7c3aed;color:#fff;padding:6px 14px;font-size:13px;text-align:center;border-bottom:1px solid #5b21b6;">
+  ⚠️ 这是冻结的旧版前端（仅供对照），新功能请用主入口
+  <a href="/" style="color:#fde68a;text-decoration:underline;font-weight:600;">前往新版</a>
+</div>
 
 <header class="miku-header px-4 py-2.5 flex items-center gap-2 sticky top-0 z-30">
   <div class="flex items-center gap-2 flex-shrink-0">
@@ -64,6 +69,8 @@
         <button @click="openManuscript(); toolMenuOpen=false" class="miku-menu-item"><span class="icon">📄</span>导出成稿 / POV</button>
         <button @click="openStats(); toolMenuOpen=false" class="miku-menu-item"><span class="icon">📊</span>统计仪表盘</button>
         <button @click="openExport(); toolMenuOpen=false" class="miku-menu-item"><span class="icon">📦</span>导出原文 / JSON 备份</button>
+        <div class="miku-menu-divider"></div>
+        <button @click="openDialogueRehearsal(); toolMenuOpen=false" class="miku-menu-item"><span class="icon">🎭</span>双角色对话演练</button>
         <div class="miku-menu-divider"></div>
         <button @click="exportWorld(); toolMenuOpen=false" class="miku-menu-item"><span class="icon">📤</span>导出 JSON</button>
         <button @click="triggerImportWorld(); toolMenuOpen=false" class="miku-menu-item"><span class="icon">📥</span>导入 JSON</button>
@@ -262,6 +269,8 @@
           <button @click="viewMode='graph'; $nextTick(() => { renderGraph(); if (compareWith) renderCompareGraph(); })" :class="viewMode==='graph'?'tab-active':'tab-idle'" class="tab-btn">因果图</button>
           <button @click="viewMode='timeline'" :class="viewMode==='timeline'?'tab-active':'tab-idle'" class="tab-btn">时间线</button>
           <button @click="viewMode='gantt'; $nextTick(() => renderGantt())" :class="viewMode==='gantt'?'tab-active':'tab-idle'" class="tab-btn" title="多分支并列时间带">🕒 时空带</button>
+          <button @click="viewMode='swimlane'; loadSwimlane()" :class="viewMode==='swimlane'?'tab-active':'tab-idle'" class="tab-btn" title="角色横道 + 章节/伏笔/issue 聚合">🎼 横道</button>
+          <button @click="viewMode='storyboard'; loadStoryboard()" :class="viewMode==='storyboard'?'tab-active':'tab-idle'" class="tab-btn" title="按章节聚合关键事件 / 角色 / 伏笔">📚 故事板</button>
           <button @click="viewMode='story'" :class="viewMode==='story'?'tab-active':'tab-idle'" class="tab-btn">📖 阅读</button>
           <button @click="viewMode='narration'" :class="viewMode==='narration'?'tab-active':'tab-idle'" class="tab-btn">叙事</button>
           <button x-show="viewMode==='graph' && pendingChanges.length>0" @click="openReconcile()"
@@ -419,6 +428,265 @@
             </div>
           </div>
         </div>
+
+        <!-- C1: 角色横道视图 -->
+        <div class="absolute inset-0 flex flex-col" x-show="viewMode==='swimlane'">
+          <div class="flex items-center gap-3 px-3 py-2 border-b border-zinc-800 text-xs">
+            <span class="text-zinc-400">角色横道</span>
+            <span class="text-zinc-600" x-show="swimlane.lanes?.length"
+              x-text="swimlane.lanes.length + ' 个角色 · 至 t' + swimlane.max_tick"></span>
+            <label class="flex items-center gap-1 cursor-pointer">
+              <input type="checkbox" x-model="swimlaneShowIssues" />
+              <span class="text-zinc-400">不一致</span>
+            </label>
+            <label class="flex items-center gap-1 cursor-pointer">
+              <input type="checkbox" x-model="swimlaneShowThreads" />
+              <span class="text-zinc-400">伏笔</span>
+            </label>
+            <label class="flex items-center gap-1 cursor-pointer">
+              <input type="checkbox" x-model="swimlaneShowChapters" />
+              <span class="text-zinc-400">章节边界</span>
+            </label>
+            <button @click="loadSwimlane()" class="ml-auto text-zinc-500 hover:text-zinc-300">⟳ 刷新</button>
+          </div>
+
+          <div class="flex-1 min-h-0 overflow-auto p-3 bg-zinc-950" x-show="swimlane.lanes?.length">
+            <div class="relative" style="min-width: 800px;">
+              <!-- tick 轴 -->
+              <div class="relative h-6 ml-32 mb-1 border-b border-zinc-800">
+                <template x-for="t in swimlaneAxisTicks()" :key="t">
+                  <div class="absolute top-0 text-[10px] text-zinc-600"
+                    :style="`left: ${swimlanePct(t)}%; transform: translateX(-50%);`">
+                    <span x-text="'t' + t"></span>
+                  </div>
+                </template>
+              </div>
+
+              <!-- 全局章节边界用 lane 内部虚线（见下），更准确 -->
+
+              <!-- 角色 lanes -->
+              <template x-for="lane in (swimlane.lanes || [])" :key="lane.entity.id">
+                <div class="flex items-center gap-2 mb-1">
+                  <div class="w-32 flex-shrink-0 text-xs text-zinc-300 truncate pr-2"
+                    :class="!lane.entity.alive ? 'line-through text-zinc-600' : ''"
+                    :title="lane.entity.name">
+                    <span x-text="lane.entity.name"></span>
+                    <span class="text-zinc-600 ml-1" x-text="'·' + lane.event_count"></span>
+                  </div>
+                  <div class="flex-1 relative h-6 bg-zinc-900/40 rounded border border-zinc-800/50">
+                    <!-- 章节虚线（lane 内重画一遍，更清晰） -->
+                    <template x-if="swimlaneShowChapters">
+                      <template x-for="ch in (swimlane.global_chapters || [])" :key="'chl_' + ch.id">
+                        <div class="absolute top-0 bottom-0 border-l border-dashed border-amber-700/30 pointer-events-none"
+                          :style="`left: ${swimlanePct(ch.tick)}%;`"></div>
+                      </template>
+                    </template>
+                    <!-- 事件点 -->
+                    <template x-for="ev in lane.events" :key="ev.id">
+                      <div class="absolute top-1/2 w-2 h-2 rounded-full bg-emerald-500 hover:bg-emerald-300 hover:scale-150 cursor-pointer transition-transform"
+                        :style="`left: ${swimlanePct(ev.tick)}%; transform: translate(-50%, -50%);`"
+                        :title="`t${ev.tick} · ${ev.title}` + (ev.description ? '\n' + ev.description : '')"
+                        @click="swimlaneSelected = { ...ev, lane: lane.entity.name }"></div>
+                    </template>
+                    <!-- 该角色相关 issue -->
+                    <template x-if="swimlaneShowIssues">
+                      <template x-for="iss in (swimlane.global_issues || []).filter(i => (i.entity_ids||[]).includes(lane.entity.id))"
+                                :key="'iss_' + iss.id + '_' + lane.entity.id">
+                        <div class="absolute top-1/2 w-2.5 h-2.5 rounded-sm bg-red-500/80 border border-red-300 cursor-pointer hover:bg-red-400 transition-colors"
+                          :style="`left: ${swimlanePct(iss.tick)}%; transform: translate(-50%, -50%) rotate(45deg);`"
+                          :title="`[${iss.severity}] ${iss.title}`"
+                          @click="swimlaneSelected = { kind:'issue', tick: iss.tick, title: iss.title, severity: iss.severity, lane: lane.entity.name }"></div>
+                      </template>
+                    </template>
+                  </div>
+                </div>
+              </template>
+
+              <!-- 伏笔 lane -->
+              <template x-if="swimlaneShowThreads && (swimlane.global_threads || []).length">
+                <div class="flex items-center gap-2 mb-1 mt-3 pt-2 border-t border-zinc-800">
+                  <div class="w-32 flex-shrink-0 text-xs text-amber-400 truncate pr-2">📌 伏笔</div>
+                  <div class="flex-1 relative bg-zinc-900/40 rounded border border-zinc-800/50"
+                    :style="`height: ${Math.max(1.5, (swimlane.global_threads||[]).length * 1.25)}rem;`">
+                    <template x-for="(th, idx) in (swimlane.global_threads || [])" :key="th.id">
+                      <div class="absolute h-3 rounded-sm cursor-pointer hover:opacity-80"
+                        :class="th.status === 'closed' ? 'bg-emerald-700/50 border border-emerald-400/30'
+                                : threadAgingLevel(th.id) === 'stale' ? 'bg-rose-700/70 border border-rose-400/60'
+                                : threadAgingLevel(th.id) === 'warn' ? 'bg-orange-600/70 border border-orange-400/50'
+                                : 'bg-amber-600/70 border border-amber-400/50'"
+                        :style="`top: ${idx * 1.25 + 0.25}rem; left: ${swimlanePct(th.opened_tick)}%; width: ${swimlanePct((th.closed_tick ?? swimlane.max_tick) - th.opened_tick)}%;`"
+                        :title="`${th.title} (${th.status})${th.status==='open' && threadAgingAge(th.id)!==null ? ' · 已 ' + threadAgingAge(th.id) + ' tick' : ''}`"
+                        @click="swimlaneSelected = { kind:'thread', tick: th.opened_tick, title: th.title, status: th.status, closed_tick: th.closed_tick, lane: '伏笔' }">
+                        <span class="text-[9px] text-zinc-100 px-1 truncate block leading-3" x-text="th.title"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <!-- 选中详情 -->
+            <div x-show="swimlaneSelected" class="mt-3 rounded border border-zinc-700 bg-zinc-900/60 p-3 text-xs">
+              <div class="flex items-center justify-between mb-1">
+                <div class="font-medium text-zinc-200">
+                  <span x-text="swimlaneSelected?.lane"></span>
+                  <span class="text-zinc-500 ml-2" x-text="'t' + swimlaneSelected?.tick"></span>
+                </div>
+                <button @click="swimlaneSelected = null" class="text-zinc-500 hover:text-zinc-300">✕</button>
+              </div>
+              <div class="text-zinc-300" x-text="swimlaneSelected?.title"></div>
+              <div x-show="swimlaneSelected?.description" class="text-zinc-500 mt-1 leading-relaxed" x-text="swimlaneSelected?.description"></div>
+              <div x-show="swimlaneSelected?.kind === 'issue'" class="text-red-400 mt-1"
+                x-text="'severity: ' + swimlaneSelected?.severity"></div>
+              <div x-show="swimlaneSelected?.kind === 'thread'" class="text-amber-400 mt-1"
+                x-text="'status: ' + swimlaneSelected?.status + (swimlaneSelected?.closed_tick != null ? ' · 已闭于 t' + swimlaneSelected?.closed_tick : '')"></div>
+            </div>
+          </div>
+
+          <div x-show="!(swimlane.lanes?.length)" class="flex-1 flex items-center justify-center text-zinc-600 text-sm">
+            <div class="text-center">
+              <div>暂无角色事件</div>
+              <div class="text-[11px] mt-1 text-zinc-700">推演几步后再来</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- C2: 章节故事板 -->
+        <div class="absolute inset-0 overflow-y-auto p-4" x-show="viewMode==='storyboard'">
+          <div x-show="storyboardLoading" class="text-center text-zinc-500 py-12 text-sm">加载中…</div>
+          <div x-show="!storyboardLoading && (storyboard?.chapters || []).length === 0"
+            class="text-center text-zinc-600 py-16">
+            <div class="text-3xl mb-2">📚</div>
+            <div class="text-sm">还没生成故事板。</div>
+            <div class="text-xs text-zinc-700 mt-2">推演几步、加几个章节标记后再来。</div>
+          </div>
+
+          <div x-show="!storyboardLoading && (storyboard?.chapters || []).length > 0" class="max-w-3xl mx-auto space-y-4">
+            <div class="flex items-center justify-between text-xs text-zinc-500 sticky top-0 z-10 bg-zinc-950/90 backdrop-blur py-2 -mx-4 px-4 border-b border-zinc-900">
+              <span x-text="(storyboard?.chapters?.length || 0) + ' 章 · 至 tick ' + (storyboard?.max_tick || 0)"></span>
+              <button @click="loadStoryboard()" class="hover:text-zinc-300">⟳ 刷新</button>
+            </div>
+
+            <template x-for="(ch, idx) in (storyboard?.chapters || [])" :key="ch.id">
+              <div>
+              <div class="rounded-lg border bg-zinc-950/40"
+                :class="ch.is_synthetic ? 'border-zinc-800 border-dashed' : 'border-zinc-800'">
+                <div class="px-4 py-3 border-b border-zinc-900 flex items-center gap-3 flex-wrap">
+                  <div class="text-xs text-zinc-600 font-mono">CH<span x-text="String(idx + 1).padStart(2,'0')"></span></div>
+                  <div class="font-semibold text-base flex-1 min-w-0 truncate" x-text="ch.title"></div>
+                  <span class="text-[11px] px-2 py-0.5 rounded bg-zinc-900 text-zinc-400 font-mono"
+                    x-text="'t' + ch.tick_start + '–' + ch.tick_end"></span>
+                  <span class="text-[11px] px-2 py-0.5 rounded bg-zinc-900 text-zinc-500"
+                    x-text="ch.event_count + ' 事件'"></span>
+                  <span x-show="(ch.issues || []).length > 0"
+                    class="text-[11px] px-2 py-0.5 rounded bg-rose-950/40 border border-rose-900/40 text-rose-300"
+                    x-text="(ch.issues || []).length + ' issue'"></span>
+                </div>
+
+                <div x-show="ch.summary" class="px-4 pt-3 text-sm italic text-zinc-400 leading-relaxed border-l-2 border-zinc-800 ml-4 my-2 pl-3" x-text="ch.summary"></div>
+
+                <div x-show="(ch.characters || []).length > 0" class="px-4 pt-3 flex flex-wrap gap-1.5">
+                  <template x-for="c in ch.characters" :key="c.id">
+                    <span class="text-[11px] px-2 py-0.5 rounded-full"
+                      :class="c.alive ? 'bg-purple-950/40 text-purple-200 border border-purple-900/40' : 'bg-zinc-900 text-zinc-500 border border-zinc-800 line-through'">
+                      <span x-text="c.name"></span>
+                      <span class="text-zinc-500 ml-1" x-text="'×' + c.appearances"></span>
+                    </span>
+                  </template>
+                </div>
+
+                <div class="px-4 pt-3 pb-2 space-y-1.5">
+                  <template x-for="ev in ch.events" :key="ev.id">
+                    <div class="flex items-start gap-2 text-sm">
+                      <span class="text-[10px] text-zinc-600 font-mono mt-1 w-8 flex-shrink-0" x-text="'t' + ev.tick"></span>
+                      <div class="flex-1 min-w-0">
+                        <div class="text-zinc-200 truncate" x-text="ev.title"></div>
+                        <div x-show="ev.description" class="text-xs text-zinc-500 truncate" x-text="ev.description"></div>
+                      </div>
+                    </div>
+                  </template>
+                  <div x-show="ch.event_count > (ch.events || []).length" class="text-[11px] text-zinc-600 pl-10"
+                    x-text="'…还有 ' + (ch.event_count - (ch.events || []).length) + ' 个事件'"></div>
+                </div>
+
+                <div x-show="(ch.threads || []).length > 0" class="px-4 pb-3 pt-1 flex flex-wrap gap-1.5 border-t border-zinc-900">
+                  <span class="text-[10px] text-zinc-600 mr-1 mt-0.5">伏笔</span>
+                  <template x-for="th in ch.threads" :key="th.id">
+                    <span class="text-[10px] px-1.5 py-0.5 rounded"
+                      :class="{
+                        'bg-amber-950/40 text-amber-300 border border-amber-900/40': th.phase === 'opened',
+                        'bg-emerald-950/40 text-emerald-300 border border-emerald-900/40': th.phase === 'closed',
+                        'bg-zinc-900 text-zinc-500 border border-zinc-800': th.phase === 'ongoing',
+                      }">
+                      <span x-text="{opened:'▷', closed:'✓', ongoing:'∼'}[th.phase]"></span>
+                      <span x-text="th.title"></span>
+                    </span>
+                  </template>
+                </div>
+
+                <div x-show="(ch.issues || []).length > 0" class="px-4 pb-3 pt-1 space-y-0.5 border-t border-zinc-900">
+                  <template x-for="iss in ch.issues" :key="iss.id">
+                    <div class="text-[11px] text-rose-300/80 flex items-center gap-2">
+                      <span class="text-rose-500">●</span>
+                      <span class="font-mono text-zinc-600" x-text="'t' + iss.tick"></span>
+                      <span class="truncate" x-text="iss.title"></span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <!-- C3: 过渡评估 -->
+              <div x-show="idx < (storyboard?.chapters?.length || 0) - 1" class="mt-3 mb-1">
+                <div class="flex items-center gap-2">
+                  <div class="flex-1 h-px bg-zinc-800"></div>
+                  <button @click="evaluateChapterTransition(idx, idx + 1)"
+                    :disabled="transitionEvals[transitionKey(idx, idx + 1)]?.loading"
+                    class="text-[11px] px-2.5 py-1 rounded border border-purple-900/50 hover:bg-purple-950/40 text-purple-300 disabled:opacity-50 flex items-center gap-1.5"
+                    :title="'评估第 ' + (idx + 1) + ' 章 → 第 ' + (idx + 2) + ' 章 的衔接'">
+                    <span x-show="!transitionEvals[transitionKey(idx, idx + 1)]?.loading">⇋ 评估过渡</span>
+                    <span x-show="transitionEvals[transitionKey(idx, idx + 1)]?.loading">评估中…</span>
+                    <template x-if="transitionEvals[transitionKey(idx, idx + 1)]?.data">
+                      <span :class="transitionScoreClass(transitionEvals[transitionKey(idx, idx + 1)].data.score)"
+                        x-text="transitionEvals[transitionKey(idx, idx + 1)].data.score === null ? '—' : (transitionEvals[transitionKey(idx, idx + 1)].data.score + '分')"></span>
+                    </template>
+                  </button>
+                  <div class="flex-1 h-px bg-zinc-800"></div>
+                </div>
+                <template x-if="transitionEvals[transitionKey(idx, idx + 1)]?.error">
+                  <div class="mt-1 text-[11px] text-rose-400 text-center"
+                    x-text="'评估失败：' + transitionEvals[transitionKey(idx, idx + 1)].error"></div>
+                </template>
+                <template x-if="transitionEvals[transitionKey(idx, idx + 1)]?.data">
+                  <div class="mt-2 mx-auto max-w-2xl rounded border border-purple-900/40 bg-purple-950/10 p-3 text-xs space-y-2">
+                    <template x-if="transitionEvals[transitionKey(idx, idx + 1)].data.skipped">
+                      <div class="text-zinc-500 italic" x-text="(transitionEvals[transitionKey(idx, idx + 1)].data.issues[0]) || '已跳过'"></div>
+                    </template>
+                    <template x-if="!transitionEvals[transitionKey(idx, idx + 1)].data.skipped">
+                      <div class="space-y-2">
+                        <div x-show="(transitionEvals[transitionKey(idx, idx + 1)].data.issues || []).length > 0">
+                          <div class="text-[10px] uppercase tracking-wide text-purple-300/70 mb-1">衔接问题</div>
+                          <ul class="space-y-0.5 text-zinc-300">
+                            <template x-for="(it, ii) in transitionEvals[transitionKey(idx, idx + 1)].data.issues" :key="ii">
+                              <li class="flex gap-1.5"><span class="text-rose-400">•</span><span x-text="it"></span></li>
+                            </template>
+                          </ul>
+                        </div>
+                        <div x-show="transitionEvals[transitionKey(idx, idx + 1)].data.suggested_bridge">
+                          <div class="text-[10px] uppercase tracking-wide text-purple-300/70 mb-1">建议过渡句</div>
+                          <div class="italic text-emerald-200 leading-relaxed border-l-2 border-emerald-700/50 pl-2"
+                            x-text="transitionEvals[transitionKey(idx, idx + 1)].data.suggested_bridge"></div>
+                        </div>
+                        <div x-show="(transitionEvals[transitionKey(idx, idx + 1)].data.issues || []).length === 0 && !transitionEvals[transitionKey(idx, idx + 1)].data.suggested_bridge"
+                          class="text-emerald-300 text-center">衔接顺畅。</div>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
         <div class="absolute inset-0 overflow-y-auto p-4 prose prose-invert max-w-none" x-show="viewMode==='narration'">
           <div x-show="timeline.pacing"
                class="not-prose mb-3 rounded px-3 py-2 text-xs flex items-center gap-2"
@@ -439,17 +707,33 @@
           </div>
           <div x-show="(timeline.plot_threads||[]).some(t=>t.status==='open')"
                class="not-prose mb-4 rounded border border-amber-700/40 bg-amber-950/20 p-3">
-            <div class="text-xs text-amber-300/80 font-semibold mb-1.5">未收的钩子
+            <div class="text-xs text-amber-300/80 font-semibold mb-1.5 flex items-center gap-2">
+              <span>未收的钩子</span>
               <span class="text-amber-400/60 font-normal"
                     x-text="'（' + (timeline.plot_threads||[]).filter(t=>t.status==='open').length + ' 条悬着）'"></span>
+              <template x-if="(threadAging.counts?.stale || 0) > 0">
+                <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-rose-900/50 text-rose-200 border border-rose-800"
+                      x-text="threadAging.counts.stale + ' 条已超期'"></span>
+              </template>
+              <template x-if="(threadAging.counts?.stale || 0) === 0 && (threadAging.counts?.warn || 0) > 0">
+                <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-orange-900/40 text-orange-200 border border-orange-800/40"
+                      x-text="threadAging.counts.warn + ' 条临近超期'"></span>
+              </template>
             </div>
             <ul class="text-xs space-y-1">
               <template x-for="t in (timeline.plot_threads||[]).filter(x=>x.status==='open')" :key="t.id">
                 <li class="flex gap-2 text-zinc-300">
-                  <span class="text-amber-400/70">●</span>
+                  <span :class="threadAgingClass(threadAgingLevel(t.id) || 'fresh')"
+                        x-text="threadAgingDot(threadAgingLevel(t.id) || 'fresh')"
+                        :title="threadAgingLevel(t.id) === 'stale' ? '已超期 ' + threadAgingAge(t.id) + ' tick'
+                              : threadAgingLevel(t.id) === 'warn' ? '临近超期（已 ' + threadAgingAge(t.id) + ' tick）'
+                              : '新近开启'"></span>
                   <span class="flex-1">
-                    <span class="font-medium text-amber-200" x-text="t.title"></span>
+                    <span class="font-medium" :class="threadAgingClass(threadAgingLevel(t.id) || 'fresh')" x-text="t.title"></span>
                     <span class="text-zinc-500 ml-1" x-text="'(tick ' + t.opened_tick + ')'"></span>
+                    <template x-if="threadAgingAge(t.id) !== null">
+                      <span class="text-zinc-600 ml-1 font-mono" x-text="'+' + threadAgingAge(t.id) + 't'"></span>
+                    </template>
                     <div class="text-zinc-400 mt-0.5" x-text="t.summary"></div>
                   </span>
                 </li>
@@ -874,6 +1158,7 @@
         <span class="text-xs text-zinc-500" x-text="'· ' + (templatesData.total || 0) + ' 个模板'"></span>
       </h3>
       <div class="flex items-center gap-2">
+        <button @click="seedOfficialTemplates(false)" class="px-3 py-1 rounded bg-amber-900/40 hover:bg-amber-900/60 text-xs text-amber-200" title="补全 Kiro 自带的 4 套官方模板（已存在则跳过）">📦 注入官方模板</button>
         <button @click="openTemplateEditor(null)" class="miku-btn miku-btn-primary">+ 新建模板</button>
         <button x-show="currentWorldId" @click="openSaveAsTemplate()" class="px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-xs">💾 把当前世界存为模板</button>
         <button @click="showTemplates=false" class="text-zinc-500 hover:text-zinc-300 px-2">✕</button>
@@ -1588,6 +1873,8 @@
           <span x-show="arcData?.entity?.current_location" x-text="'现在: ' + arcData?.entity?.current_location"></span>
           <span x-show="(arcData?.stats?.open_issue_count || 0) > 0" class="ml-2 text-rose-400"
             x-text="'🔴 ' + arcData.stats.open_issue_count + ' 个未解决问题'"></span>
+          <span x-show="(arcData?.stats?.open_thread_count || 0) > 0" class="ml-2 text-amber-400"
+            x-text="'📌 ' + arcData.stats.open_thread_count + ' 个未收尾伏笔'"></span>
           <span x-show="arcData?.entity?.alive === 0" class="ml-2 text-red-400">已不在</span>
         </div>
       </div>
@@ -1667,6 +1954,25 @@
               <div class="text-zinc-400 mt-0.5 leading-relaxed" x-text="iss.description"></div>
               <div x-show="iss.suggestion" class="mt-1 text-emerald-400/80 text-[11px]"
                 x-text="'建议：' + iss.suggestion"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- B5: 涉及本角色的未收尾伏笔 -->
+      <div x-show="(arcData?.open_threads || []).length" class="mb-4 bg-amber-950/15 border border-amber-900/40 rounded p-3">
+        <div class="text-xs text-amber-300 mb-2 font-medium flex items-center gap-2">
+          <span>📌 未收尾的伏笔</span>
+          <span class="text-zinc-500" x-text="'(' + (arcData?.open_threads?.length || 0) + ')'"></span>
+        </div>
+        <div class="space-y-1.5">
+          <template x-for="th in (arcData?.open_threads || [])" :key="th.id">
+            <div class="text-xs bg-zinc-950/60 border border-zinc-800 rounded px-2 py-1.5">
+              <div class="flex items-center gap-2 mb-0.5">
+                <span class="font-medium text-zinc-200" x-text="th.title"></span>
+                <span class="text-[10px] text-zinc-600 ml-auto font-mono" x-text="'埋于 t' + th.opened_tick"></span>
+              </div>
+              <div x-show="th.summary" class="text-zinc-400 leading-relaxed" x-text="th.summary"></div>
             </div>
           </template>
         </div>
@@ -2153,6 +2459,119 @@
             <div class="border-t pt-2 mt-2" style="border-color: var(--bd-1);">
               <div class="text-zinc-500 text-[10px] mb-1" x-text="s.title || ''"></div>
               <div class="text-zinc-300 leading-relaxed whitespace-pre-wrap" x-text="s.text"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- B3: 世界设定库 -->
+      <div class="border-t pt-4 mt-2" style="border-color: var(--bd-1);">
+        <div class="flex items-center justify-between mb-2">
+          <div class="font-medium text-zinc-200 flex items-center gap-2">
+            <span>📜 世界设定库</span>
+            <span class="text-xs text-zinc-500" x-text="'(' + (loreList?.length || 0) + ')'"></span>
+          </div>
+          <button @click="loreShowAdd = !loreShowAdd"
+            class="text-xs px-2 py-0.5 rounded border border-zinc-700 hover:bg-zinc-800 text-zinc-300">
+            <span x-show="!loreShowAdd">+ 添加</span>
+            <span x-show="loreShowAdd">收起</span>
+          </button>
+          <button @click="scanLoreGaps()" :disabled="loreGapsLoading"
+            class="text-xs px-2 py-0.5 rounded border border-purple-800 hover:bg-purple-900/40 text-purple-300 disabled:opacity-50"
+            title="让 AI 找叙事中反复出现但缺 lore 解释的名词">
+            <span x-show="!loreGapsLoading">🔍 扫缺口</span>
+            <span x-show="loreGapsLoading">扫描中…</span>
+          </button>
+        </div>
+        <div class="text-xs text-zinc-500 mb-2 leading-relaxed">
+          长文本约束（"宋代背景"、"魔法不能伤神"），按优先级注入推演 prompt。pinned 条目永远保留，非 pinned 总长限制 4000 字。
+        </div>
+
+        <div x-show="loreShowAdd" class="bg-zinc-950/40 border border-zinc-800 rounded p-2 mb-2 space-y-1.5">
+          <div class="flex gap-1.5">
+            <input x-model="loreDraft.title" placeholder="标题（如：魔法不能伤神）"
+              class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs" />
+            <select x-model="loreDraft.category"
+              class="bg-zinc-900 border border-zinc-700 rounded px-1 py-1 text-xs">
+              <option value="setting">背景</option>
+              <option value="magic">规则</option>
+              <option value="taboo">禁忌</option>
+              <option value="culture">文化</option>
+              <option value="character">人物</option>
+              <option value="other">其他</option>
+            </select>
+          </div>
+          <textarea x-model="loreDraft.content" rows="3" placeholder="详细说明（可选）"
+            class="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs leading-relaxed"></textarea>
+          <div class="flex items-center gap-3 text-xs">
+            <label class="flex items-center gap-1 text-zinc-400">
+              优先级
+              <input type="number" x-model.number="loreDraft.priority" min="0" max="100"
+                class="w-12 bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5" />
+            </label>
+            <label class="flex items-center gap-1 text-zinc-400 cursor-pointer">
+              <input type="checkbox" x-model="loreDraft.pinned" />
+              <span>置顶（不限字数）</span>
+            </label>
+            <button @click="saveLoreDraft()" :disabled="!loreDraft.title?.trim()"
+              class="ml-auto miku-btn miku-btn-primary text-xs">添加</button>
+          </div>
+        </div>
+
+        <div x-show="(loreList?.length || 0) === 0 && !loreShowAdd && (loreGaps?.length || 0) === 0" class="text-xs text-zinc-600 py-3 text-center">
+          还没有世界设定。点"+ 添加"开始。
+        </div>
+
+        <!-- B7: lore 缺口候选 -->
+        <div x-show="(loreGaps?.length || 0) > 0" class="mb-3 space-y-1.5">
+          <div class="flex items-center gap-2 text-[11px] text-purple-300/80">
+            <span>🔍 AI 扫到 <span x-text="loreGaps.length"></span> 个候选</span>
+            <span x-show="loreGapsScanned" class="text-zinc-600"
+              x-text="'(扫描了 ' + (loreGapsScanned?.events || 0) + ' 事件 · ' + (loreGapsScanned?.narrations || 0) + ' 段叙事)'"></span>
+            <button @click="loreGaps = []" class="ml-auto text-zinc-600 hover:text-zinc-400">清空</button>
+          </div>
+          <template x-for="gap in loreGaps" :key="gap.name">
+            <div class="bg-purple-950/20 border border-purple-900/40 rounded p-2">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-900/60 text-purple-200"
+                  x-text="loreKindLabel(gap.kind)"></span>
+                <span class="text-sm font-medium text-zinc-100" x-text="gap.name"></span>
+                <div class="ml-auto flex gap-1">
+                  <button @click="createLoreFromGap(gap)" :disabled="loreGapsCreating[gap.name]"
+                    class="text-[11px] px-2 py-0.5 rounded bg-emerald-800 hover:bg-emerald-700 text-emerald-100 disabled:opacity-50">
+                    <span x-show="!loreGapsCreating[gap.name]">+ 创建 lore</span>
+                    <span x-show="loreGapsCreating[gap.name]">创建中…</span>
+                  </button>
+                  <button @click="dismissLoreGap(gap)"
+                    class="text-[11px] px-2 py-0.5 rounded text-zinc-500 hover:text-zinc-300" title="忽略">✕</button>
+                </div>
+              </div>
+              <div x-show="gap.suggested_summary" class="text-xs text-zinc-300 leading-relaxed mb-1" x-text="gap.suggested_summary"></div>
+              <div x-show="gap.reason" class="text-[11px] text-zinc-500 italic" x-text="'— ' + gap.reason"></div>
+              <div x-show="(gap.mentions || []).length > 0" class="mt-1 space-y-0.5">
+                <template x-for="(m, mi) in gap.mentions" :key="mi">
+                  <div class="text-[11px] text-zinc-500 truncate before:content-['•'] before:mr-1.5 before:text-purple-500/60"
+                    x-text="m"></div>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <div class="space-y-1.5">
+          <template x-for="lore in (loreList || [])" :key="lore.id">
+            <div class="bg-zinc-950/40 border border-zinc-800 rounded p-2 group">
+              <div class="flex items-center gap-2 mb-1">
+                <span x-show="lore.pinned" class="text-amber-400 text-xs" title="置顶">📌</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400"
+                  x-text="loreCategoryLabel(lore.category)"></span>
+                <span class="text-sm font-medium text-zinc-200" x-text="lore.title"></span>
+                <span class="text-[10px] text-zinc-600 ml-auto font-mono" x-text="'p' + lore.priority"></span>
+                <button @click="deleteLore(lore.id)"
+                  class="opacity-0 group-hover:opacity-100 text-xs text-red-400 hover:text-red-300">✕</button>
+              </div>
+              <div x-show="lore.content" class="text-xs text-zinc-400 leading-relaxed whitespace-pre-wrap pl-1"
+                x-text="lore.content"></div>
             </div>
           </template>
         </div>
@@ -2891,11 +3310,32 @@
       <span x-show="!scanning">▶ 开始扫描</span>
       <span x-show="scanning">⏳ 扫描中…</span>
     </button>
+    <button @click="runSceneScan()" :disabled="scanning"
+      class="w-full px-3 py-1.5 rounded bg-purple-800 hover:bg-purple-700 disabled:opacity-40 text-xs"
+      title="专门检查位置/在场角色/时间天气/物品状态的衔接断裂">
+      <span x-show="!scanning">🎬 场景连续性扫描</span>
+      <span x-show="scanning">⏳ 扫描中…</span>
+    </button>
+    <button @click="batchSuggestPatches()" :disabled="batchSuggesting || (issueCounts.open||0)===0"
+      class="w-full px-3 py-1.5 rounded bg-fuchsia-800 hover:bg-fuchsia-700 disabled:opacity-40 text-xs">
+      <span x-show="!batchSuggesting">💡 全部生成改稿建议 <span x-show="(issueCounts.open||0)>0" x-text="'(' + issueCounts.open + ')'"></span></span>
+      <span x-show="batchSuggesting">⏳ 生成中…</span>
+    </button>
     <div class="flex items-center gap-2 text-xs">
       <span class="text-zinc-500">查看</span>
       <button @click="issueFilter='open'" :class="issueFilter==='open'?'bg-rose-900/40 text-rose-200':'bg-zinc-800 text-zinc-400'" class="px-2 py-0.5 rounded">待处理 <span x-text="'(' + issueCounts.open + ')'"></span></button>
       <button @click="issueFilter='ignored'" :class="issueFilter==='ignored'?'bg-zinc-700 text-zinc-200':'bg-zinc-800 text-zinc-400'" class="px-2 py-0.5 rounded">已忽略 <span x-text="'(' + issueCounts.ignored + ')'"></span></button>
       <button @click="issueFilter='resolved'" :class="issueFilter==='resolved'?'bg-emerald-900/40 text-emerald-200':'bg-zinc-800 text-zinc-400'" class="px-2 py-0.5 rounded">已修复 <span x-text="'(' + issueCounts.resolved + ')'"></span></button>
+    </div>
+    <div class="flex items-center gap-1 text-[11px] flex-wrap">
+      <span class="text-zinc-500">类别</span>
+      <button @click="issueCategoryFilter='all'" :class="issueCategoryFilter==='all'?'bg-zinc-600 text-zinc-100':'bg-zinc-800 text-zinc-500'" class="px-1.5 py-0.5 rounded">全部</button>
+      <button @click="issueCategoryFilter='continuity'" :class="issueCategoryFilter==='continuity'?'bg-purple-800 text-purple-100':'bg-zinc-800 text-zinc-500'" class="px-1.5 py-0.5 rounded">场景</button>
+      <button @click="issueCategoryFilter='personality'" :class="issueCategoryFilter==='personality'?'bg-rose-800 text-rose-100':'bg-zinc-800 text-zinc-500'" class="px-1.5 py-0.5 rounded">性格</button>
+      <button @click="issueCategoryFilter='ability'" :class="issueCategoryFilter==='ability'?'bg-orange-800 text-orange-100':'bg-zinc-800 text-zinc-500'" class="px-1.5 py-0.5 rounded">能力</button>
+      <button @click="issueCategoryFilter='rule'" :class="issueCategoryFilter==='rule'?'bg-amber-800 text-amber-100':'bg-zinc-800 text-zinc-500'" class="px-1.5 py-0.5 rounded">规则</button>
+      <button @click="issueCategoryFilter='timeline'" :class="issueCategoryFilter==='timeline'?'bg-cyan-800 text-cyan-100':'bg-zinc-800 text-zinc-500'" class="px-1.5 py-0.5 rounded">时间</button>
+      <button @click="issueCategoryFilter='relation'" :class="issueCategoryFilter==='relation'?'bg-blue-800 text-blue-100':'bg-zinc-800 text-zinc-500'" class="px-1.5 py-0.5 rounded">关系</button>
     </div>
   </div>
 
@@ -2919,6 +3359,59 @@
         <div x-show="iss.suggestion" class="text-xs text-emerald-300/80 leading-relaxed bg-emerald-950/30 border-l-2 border-emerald-700/50 pl-2 py-1">
           💡 <span x-text="iss.suggestion"></span>
         </div>
+
+        <!-- A 收尾：editor 建议的具体 patch -->
+        <div x-show="(issuePatches[iss.id] || []).length > 0" class="space-y-1.5">
+          <template x-for="p in (issuePatches[iss.id] || [])" :key="p.id">
+            <div class="rounded border border-purple-900/40 bg-purple-950/20 p-2 text-xs">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-[10px] uppercase tracking-wide text-purple-300/80"
+                  x-text="{narration:'叙事', event_title:'事件标题', event_description:'事件描述'}[p.target_kind] + ' · ' + p.target_id.slice(0,10)"></span>
+                <span class="text-[10px] px-1.5 rounded"
+                  :class="{'bg-emerald-900/60 text-emerald-200': p.status==='applied', 'bg-zinc-800 text-zinc-400': p.status==='rejected', 'bg-amber-900/40 text-amber-200': p.status==='pending'}"
+                  x-text="p.status"></span>
+              </div>
+              <div x-show="p.before_excerpt" class="text-rose-300/80 line-through bg-rose-950/20 px-1.5 py-0.5 rounded mb-1" x-text="p.before_excerpt"></div>
+              <div class="text-emerald-200 bg-emerald-950/30 px-1.5 py-0.5 rounded" x-text="p.after_text"></div>
+              <div x-show="p.rationale" class="text-zinc-500 mt-1 italic" x-text="'— ' + p.rationale"></div>
+              <div x-show="p.status==='pending'" class="flex items-center gap-1 mt-1.5">
+                <button @click="applyPatch(iss, p)" class="text-[11px] px-2 py-0.5 rounded bg-emerald-800 hover:bg-emerald-700 text-emerald-100">✓ 应用</button>
+                <button @click="togglePatchPreview(p)" class="text-[11px] px-2 py-0.5 rounded bg-purple-900/60 hover:bg-purple-800 text-purple-100">
+                  <span x-show="patchPreviews[p.id]?.open !== true">👁 预览</span>
+                  <span x-show="patchPreviews[p.id]?.open === true">收起</span>
+                </button>
+                <button @click="rejectPatch(iss, p)" class="text-[11px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">拒绝</button>
+              </div>
+              <div x-show="p.status==='applied'" class="flex items-center gap-1 mt-1.5">
+                <button @click="undoPatch(iss, p)" class="text-[11px] px-2 py-0.5 rounded bg-amber-800 hover:bg-amber-700 text-amber-100">↺ 撤销</button>
+                <span class="text-[10px] text-zinc-500" x-text="'已应用 ' + (p.applied_at ? new Date(p.applied_at).toLocaleString() : '')"></span>
+              </div>
+              <!-- A4: diff 预览 -->
+              <div x-show="patchPreviews[p.id]?.open" class="mt-2 border border-zinc-800 rounded bg-zinc-950 p-2 text-[11px] leading-relaxed">
+                <div x-show="patchPreviews[p.id]?.loading" class="text-zinc-500">加载中…</div>
+                <template x-if="patchPreviews[p.id]?.data">
+                  <div>
+                    <div class="text-[10px] uppercase tracking-wide text-zinc-500 mb-1 flex items-center gap-2">
+                      <span>预览（替换嵌入完整文本）</span>
+                      <span x-show="!patchPreviews[p.id].data.found_target" class="text-rose-400">⚠ 目标已不存在</span>
+                      <span x-show="patchPreviews[p.id].data.found_target && !patchPreviews[p.id].data.excerpt_match" class="text-amber-400">⚠ 摘录未命中（将整段替换）</span>
+                    </div>
+                    <div class="font-mono whitespace-pre-wrap break-words">
+                      <span class="text-zinc-500" x-text="patchPreviews[p.id].data.before_context"></span><span
+                        x-show="patchPreviews[p.id].data.original_changed"
+                        class="bg-rose-950/60 text-rose-200 line-through px-0.5 rounded"
+                        x-text="patchPreviews[p.id].data.original_changed"></span><span
+                        class="bg-emerald-950/60 text-emerald-200 px-0.5 rounded ml-0.5"
+                        x-text="patchPreviews[p.id].data.new_changed"></span><span
+                        class="text-zinc-500" x-text="patchPreviews[p.id].data.after_context"></span>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+
         <div x-show="iss.entity_ids && iss.entity_ids.length > 0" class="flex flex-wrap gap-1">
           <template x-for="eid in iss.entity_ids" :key="eid">
             <span class="text-[10px] px-1.5 rounded bg-zinc-800 text-zinc-400" x-text="entityName(eid) || eid.slice(0,8)"></span>
@@ -2928,11 +3421,97 @@
           <button x-show="iss.status==='open'" @click="setIssueStatus(iss.id,'resolved')" class="text-[11px] px-2 py-0.5 rounded bg-emerald-800 hover:bg-emerald-700 text-emerald-100">✓ 已修复</button>
           <button x-show="iss.status==='open'" @click="setIssueStatus(iss.id,'ignored')" class="text-[11px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">忽略</button>
           <button x-show="iss.status==='open'" @click="fixIssueWithAI(iss)" class="text-[11px] px-2 py-0.5 rounded bg-purple-800 hover:bg-purple-700 text-purple-100">🤖 让 AI 修</button>
+          <button x-show="iss.status==='open'" @click="suggestPatch(iss)" :disabled="patchLoading[iss.id]" class="text-[11px] px-2 py-0.5 rounded bg-fuchsia-800 hover:bg-fuchsia-700 text-fuchsia-100 disabled:opacity-50">
+            <span x-show="!patchLoading[iss.id]">💡 改稿建议</span>
+            <span x-show="patchLoading[iss.id]">生成中…</span>
+          </button>
           <button x-show="iss.status!=='open'" @click="setIssueStatus(iss.id,'open')" class="text-[11px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">↺ 撤销</button>
           <button @click="deleteIssue(iss.id)" class="text-[11px] px-1.5 py-0.5 rounded text-zinc-600 hover:text-rose-400 ml-auto">删除</button>
         </div>
       </div>
     </template>
+  </div>
+</div>
+
+<div x-show="showDialogueRehearsal" x-cloak class="fixed inset-0 miku-modal-bg flex items-center justify-center z-40" @click.self="showDialogueRehearsal=false">
+  <div class="bg-zinc-900 border border-zinc-800 rounded-lg w-[720px] max-w-[95vw] max-h-[88vh] flex flex-col">
+    <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between bg-gradient-to-r from-purple-950/30 to-zinc-900">
+      <h3 class="font-semibold flex items-center gap-2"><span>🎭</span><span>双角色对话演练</span>
+        <span class="text-xs text-zinc-500">不写入主线，仅生成可参考稿</span>
+      </h3>
+      <button @click="showDialogueRehearsal=false" class="text-zinc-500 hover:text-zinc-300">✕</button>
+    </div>
+    <div class="px-4 py-3 border-b border-zinc-800 grid grid-cols-2 gap-3 text-sm">
+      <div>
+        <label class="text-xs text-zinc-500 mb-1 block">角色 A</label>
+        <select class="miku-input w-full" x-model="dialogueRehearsal.actorA">
+          <option value="">— 选择 —</option>
+          <template x-for="e in characterEntities()" :key="e.id">
+            <option :value="e.id" x-text="e.name"></option>
+          </template>
+        </select>
+      </div>
+      <div>
+        <label class="text-xs text-zinc-500 mb-1 block">角色 B</label>
+        <select class="miku-input w-full" x-model="dialogueRehearsal.actorB">
+          <option value="">— 选择 —</option>
+          <template x-for="e in characterEntities()" :key="e.id">
+            <option :value="e.id" x-text="e.name"></option>
+          </template>
+        </select>
+      </div>
+      <div class="col-span-2">
+        <label class="text-xs text-zinc-500 mb-1 block">情境（可选，描述场合/位置）</label>
+        <input class="miku-input w-full" x-model="dialogueRehearsal.scene" placeholder="例：黄昏的茶馆角落" />
+      </div>
+      <div class="col-span-2">
+        <label class="text-xs text-zinc-500 mb-1 block">张力点 / 想聊的话题（可选）</label>
+        <input class="miku-input w-full" x-model="dialogueRehearsal.goal" placeholder="例：A 想试探 B 是否知道师门旧事" />
+      </div>
+      <div>
+        <label class="text-xs text-zinc-500 mb-1 block">轮数</label>
+        <input type="number" min="3" max="20" class="miku-input w-full" x-model.number="dialogueRehearsal.turns" />
+      </div>
+      <div class="flex items-end gap-2">
+        <button @click="runDialogueRehearsal()"
+          :disabled="dialogueRehearsal.running || !dialogueRehearsal.actorA || !dialogueRehearsal.actorB || dialogueRehearsal.actorA === dialogueRehearsal.actorB"
+          class="flex-1 px-3 py-1.5 rounded bg-purple-700 hover:bg-purple-600 disabled:opacity-40 text-sm">
+          <span x-show="!dialogueRehearsal.running">▶ 生成对话</span>
+          <span x-show="dialogueRehearsal.running">⏳ 生成中…</span>
+        </button>
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto p-4 space-y-2 text-sm">
+      <div x-show="!dialogueRehearsal.result && !dialogueRehearsal.running" class="text-zinc-600 text-center py-12 text-xs">
+        填好上面的字段，点"生成对话"。
+      </div>
+      <template x-if="dialogueRehearsal.result">
+        <div class="space-y-3">
+          <div x-show="dialogueRehearsal.result.title" class="text-purple-300 font-medium" x-text="'《' + dialogueRehearsal.result.title + '》'"></div>
+          <template x-for="(t, i) in (dialogueRehearsal.result.turns || [])" :key="i">
+            <div class="bg-zinc-950/60 border border-zinc-800 rounded px-3 py-2">
+              <div class="flex items-baseline gap-2 mb-1">
+                <span class="text-purple-300 font-medium" x-text="dialogueSpeakerName(t.speaker_id)"></span>
+                <span x-show="t.beat" class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400" x-text="t.beat"></span>
+              </div>
+              <div class="text-zinc-200 leading-relaxed" x-text="t.text"></div>
+            </div>
+          </template>
+          <div x-show="dialogueRehearsal.result.summary" class="text-xs text-zinc-500 italic border-l-2 border-purple-800 pl-2"
+               x-text="'小结：' + dialogueRehearsal.result.summary"></div>
+          <div x-show="dialogueRehearsal.result.raw_text" class="text-xs text-rose-400 whitespace-pre-wrap"
+               x-text="'解析失败的原文：\n' + dialogueRehearsal.result.raw_text"></div>
+        </div>
+      </template>
+    </div>
+    <div class="px-4 py-3 border-t border-zinc-800 flex items-center justify-end gap-2">
+      <button @click="showDialogueRehearsal=false" class="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-xs">关闭</button>
+      <button @click="saveDialogueRehearsal()"
+        :disabled="!(dialogueRehearsal.result && dialogueRehearsal.result.turns && dialogueRehearsal.result.turns.length)"
+        class="px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-xs">
+        💾 采纳为旁注（落到当前 tick）
+      </button>
+    </div>
   </div>
 </div>
 
@@ -3174,6 +3753,9 @@
   </div>
 </div>
 
+<script src="/static/modules/dialogue.js"></script>
+<script src="/static/modules/lore.js"></script>
+<script src="/static/modules/map.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from app.providers.base import LLMResponse, ToolCall
-from app.engine.executor import execute_tool
+from app.engine.core.executor import execute_tool
 from app.engine import multi_agent
 from app.models import Event
 
@@ -156,7 +156,7 @@ def test_run_multi_agent_step_full_chain(db, world_factory):
 
 def test_subagent_system_prompt_has_writing_rules():
     """SUBAGENT_SYSTEM_PROMPT 应包含'笔墨'章节，要求细节而非日志。"""
-    from app.engine.multi_agent import SUBAGENT_SYSTEM_PROMPT
+    from app.engine.agents.multi_agent import SUBAGENT_SYSTEM_PROMPT
     assert "笔墨" in SUBAGENT_SYSTEM_PROMPT
     # 关键词
     for kw in ("voice", "细节", "元叙述"):
@@ -165,14 +165,14 @@ def test_subagent_system_prompt_has_writing_rules():
 
 def test_subagent_speak_tool_demands_voice():
     """speak 工具说明应要求台词体现 voice，不是中性叙述。"""
-    from app.engine.multi_agent import SUBAGENT_TOOLS
+    from app.engine.agents.multi_agent import SUBAGENT_TOOLS
     spec = next(t for t in SUBAGENT_TOOLS if t.name == "speak")
     assert "voice" in spec.description.lower()
 
 
 def test_subagent_propose_action_demands_imagery():
     """propose_action 应要求画面感动作描述，提供反例对比。"""
-    from app.engine.multi_agent import SUBAGENT_TOOLS
+    from app.engine.agents.multi_agent import SUBAGENT_TOOLS
     spec = next(t for t in SUBAGENT_TOOLS if t.name == "propose_action")
     assert "画面感" in spec.description
     assert "差例" in spec.description and "好例" in spec.description

@@ -18,13 +18,13 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from ..models import (
+from ...models import (
     World, Branch, Entity, Event, NarrativeLog,
     ConsistencyIssue, ScanRun,
 )
-from ..providers import get_provider
-from ..providers.base import Message
-from .executor import active_branch_id
+from ...providers import get_provider
+from ...providers.base import Message
+from ..core.executor import active_branch_id
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ CATEGORY_LABELS = {
     "rule": "规则违反",
     "timeline": "时间线悖论",
     "relation": "关系冲突",
+    "continuity": "场景连续性",
     "other": "其它",
 }
 

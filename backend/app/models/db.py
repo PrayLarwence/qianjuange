@@ -63,6 +63,10 @@ def _migrate() -> None:
                 conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN persona TEXT DEFAULT '{}'")
             if ecols and "memories" not in ecols:
                 conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN memories TEXT DEFAULT '[]'")
+            if ecols and "tags" not in ecols:
+                conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN tags TEXT DEFAULT '[]'")
+            if ecols and "pinned" not in ecols:
+                conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN pinned INTEGER DEFAULT 0")
         except Exception:
             pass
         try:
@@ -107,6 +111,12 @@ def _migrate() -> None:
                 conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN editor_model_override VARCHAR DEFAULT ''")
             if wcols and "reader_model_override" not in wcols:
                 conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN reader_model_override VARCHAR DEFAULT ''")
+            if wcols and "manuscript_chunks" not in wcols:
+                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN manuscript_chunks TEXT DEFAULT '[]'")
+            if wcols and "manuscript_draft_events" not in wcols:
+                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN manuscript_draft_events TEXT DEFAULT '[]'")
+            if wcols and "agent_pipeline" not in wcols:
+                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN agent_pipeline TEXT")
         except Exception:
             pass
         # 阶段 0：NarrativeLog 加多 agent 字段
@@ -126,6 +136,13 @@ def _migrate() -> None:
             cmcols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(chapter_markers)").fetchall()}
             if cmcols and "summary" not in cmcols:
                 conn.exec_driver_sql("ALTER TABLE chapter_markers ADD COLUMN summary TEXT DEFAULT ''")
+        except Exception:
+            pass
+        # A2: IssuePatch 加 original_snapshot（apply 时存改前文本，用于 undo）
+        try:
+            ipcols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(issue_patches)").fetchall()}
+            if ipcols and "original_snapshot" not in ipcols:
+                conn.exec_driver_sql("ALTER TABLE issue_patches ADD COLUMN original_snapshot TEXT DEFAULT ''")
         except Exception:
             pass
 

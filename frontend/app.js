@@ -5,7 +5,7 @@ function escapeHtml(s) {
 }
 
 function sandbox() {
-  return {
+  const base = {
     worlds: [],
     branches: [],
     currentWorldId: '',
@@ -87,6 +87,21 @@ function sandbox() {
     settingsDraft: { name: '', description: '', outline: '', core_rules: [], forbidden: [], tone: '', language: '', notes: '', style_profile_id: '' },
     settingsSaving: false,
     stylesAvailable: [],
+    // B3: 世界设定库（state 已迁至 modules/lore.js）
+    // C1: swimlane 视图
+    swimlane: { max_tick: 0, lanes: [], global_chapters: [], global_issues: [], global_threads: [] },
+    swimlaneShowIssues: true,
+    swimlaneShowThreads: true,
+    swimlaneShowChapters: true,
+    swimlaneSelected: null,
+    // C2: 故事板
+    storyboard: { max_tick: 0, chapters: [] },
+    storyboardLoading: false,
+    // A 收尾：issue patch
+    issuePatches: {},   // issue_id -> [patch...]
+    patchLoading: {},   // issue_id -> bool
+    patchPreviews: {},  // patch_id -> { open, loading, data }
+    batchSuggesting: false,
     stylePreview: { id: '', name: '', spec_text: '', samples: [] },
     chapterCritique: { open: false, loading: false, chapter: null, data: null, error: '' },
 
@@ -176,6 +191,9 @@ function sandbox() {
     issueCounts: { open: 0, ignored: 0, resolved: 0 },
     scans: [],
     issueFilter: 'open',
+    issueCategoryFilter: 'all',
+
+    // dialogue rehearsal state 已迁至 modules/dialogue.js
     scanScope: 'recent',
     scanFrom: 0,
     scanTo: 0,
@@ -184,34 +202,7 @@ function sandbox() {
     showStats: false,
     stats: null,
     toolMenuOpen: false,
-    showMap: false,
-    mapMeta: null,
-    mapLayer: 'biome',
-    mapImgUrl: '',
-    mapInfo: null,
-    mapBusy: false,
-    mapTextStatus: '',
-    mapGenParams: { width: 512, height: 384, seed: 0, sea_level: 0.42, octaves: 6, persistence: 0.55, base_freq: 2.5, warp: 0.12 },
-    mapZoom: 1,
-    mapPan: { x: 0, y: 0 },
-    mapDragging: false,
-    mapTool: 'view',
-    mapPaintTerrain: 4,
-    mapBrushSize: 3,
-    mapPainting: false,
-    mapHover: { x: null, y: null },
-    pinnedEntities: [],
-    pinTargetEntity: null,
-    gotoTargetEntity: null,
-    simPlaying: false,
-    simInterval: null,
-    simStatus: [],
-    _mapDragStart: null,
-    _paintBuffer: [],
-    _paintFlushTimer: null,
-    mapImportOpen: false,
-    mapImportFile: null,
-    mapImportParams: { width: 512, height: 384, sea_level: 0.42, blur: 0.6, contrast: 1.0, invert: false, seed: 0 },
+    // map / sandbox state 已迁至 modules/map.js
     msMode: 'manuscript',
     msFormat: 'markdown',
     msPolish: 'raw',
@@ -558,7 +549,8 @@ function sandbox() {
     get openIssueCount() { return this.issueCounts?.open || 0; },
 
     filteredIssues() {
-      return this.issues.filter(i => i.status === this.issueFilter);
+      return this.issues.filter(i => i.status === this.issueFilter
+        && (this.issueCategoryFilter === 'all' || i.category === this.issueCategoryFilter));
     },
 
     severityBg(sev) {
@@ -587,6 +579,9 @@ function sandbox() {
         this.issues = r.issues || [];
         this.issueCounts = r.counts || { open: 0, ignored: 0, resolved: 0 };
         this.scans = r.scans || [];
+        // 拉每个 open issue 已有的 patch（懒一点：仅前 30 条避免过多请求）
+        const openIssues = this.issues.filter(i => i.status === 'open').slice(0, 30);
+        await Promise.all(openIssues.map(i => this.loadPatchesForIssue(i)));
       } catch (e) { console.error(e); }
     },
 
@@ -616,6 +611,38 @@ function sandbox() {
       }
     },
 
+    // B8: 场景连续性扫描
+    async runSceneScan() {
+      if (!this.currentWorldId || this.scanning) return;
+      this.scanning = true;
+      try {
+        const body = { scope: this.scanScope, provider: this.provider };
+        if (this.scanScope === 'custom') {
+          body.tick_from = parseInt(this.scanFrom) || 0;
+          body.tick_to = parseInt(this.scanTo) || 0;
+        }
+        const r = await this.api('POST', `/worlds/${this.currentWorldId}/scene_continuity/scan`, body);
+        await this.refreshIssues();
+        const status = r.scan?.status;
+        if (status === 'failed') {
+          this.flashToast('场景扫描失败：' + (r.scan.error || '未知'));
+        } else {
+          const n = r.issues?.length || 0;
+          this.flashToast(n === 0 ? '场景衔接 ✓' : `发现 ${n} 处场景断裂`);
+          if (n > 0) {
+            this.issueFilter = 'open';
+            this.issueCategoryFilter = 'continuity';
+          }
+        }
+      } catch (e) {
+        alert('场景扫描失败: ' + e.message);
+      } finally {
+        this.scanning = false;
+      }
+    },
+
+    // P2: 双角色对话演练已迁至 modules/dialogue.js
+
     async setIssueStatus(issueId, status) {
       try {
         await this.api('PATCH', `/issues/${issueId}`, { status });
@@ -638,6 +665,95 @@ function sandbox() {
       this.flashToast('修复提示已填入推演框，按推演继续');
     },
 
+    // ---------- A 收尾：editor 建议 patch ----------
+    async loadPatchesForIssue(iss) {
+      try {
+        const r = await this.api('GET', `/issues/${iss.id}/patches`);
+        this.issuePatches[iss.id] = r.patches || [];
+      } catch (e) {
+        this.issuePatches[iss.id] = [];
+      }
+    },
+    async suggestPatch(iss) {
+      this.patchLoading[iss.id] = true;
+      try {
+        const r = await this.api('POST', `/issues/${iss.id}/suggest_patch`, {});
+        this.issuePatches[iss.id] = r.patches || [];
+        if (r.created === 0) {
+          this.flashToast('AI 未给出可应用的改稿建议');
+        } else {
+          this.flashToast(`生成 ${r.created} 条改稿建议`);
+        }
+      } catch (e) {
+        alert('建议失败: ' + (e.message || e));
+      } finally {
+        this.patchLoading[iss.id] = false;
+      }
+    },
+    async applyPatch(iss, p) {
+      try {
+        await this.api('POST', `/issue_patches/${p.id}/apply`);
+        this.flashToast('✓ 已应用');
+        await this.loadPatchesForIssue(iss);
+        await this.refreshTimeline();
+      } catch (e) {
+        alert('应用失败: ' + (e.message || e));
+      }
+    },
+    async rejectPatch(iss, p) {
+      try {
+        await this.api('POST', `/issue_patches/${p.id}/reject`);
+        await this.loadPatchesForIssue(iss);
+      } catch (e) {
+        alert('拒绝失败: ' + (e.message || e));
+      }
+    },
+    async undoPatch(iss, p) {
+      try {
+        await this.api('POST', `/issue_patches/${p.id}/undo`);
+        this.flashToast('↺ 已撤销');
+        await this.loadPatchesForIssue(iss);
+        await this.refreshTimeline();
+      } catch (e) {
+        alert('撤销失败: ' + (e.message || e));
+      }
+    },
+    async togglePatchPreview(p) {
+      const cur = this.patchPreviews[p.id];
+      if (cur && cur.open) {
+        this.patchPreviews[p.id] = { ...cur, open: false };
+        return;
+      }
+      this.patchPreviews[p.id] = { open: true, loading: true, data: null };
+      try {
+        const data = await this.api('GET', `/issue_patches/${p.id}/preview`);
+        this.patchPreviews[p.id] = { open: true, loading: false, data };
+      } catch (e) {
+        this.patchPreviews[p.id] = { open: true, loading: false, data: null };
+        alert('预览失败: ' + (e.message || e));
+      }
+    },
+    async batchSuggestPatches() {
+      if (!this.currentWorldId || this.batchSuggesting) return;
+      const openCount = this.issueCounts.open || 0;
+      if (openCount === 0) { this.flashToast('没有待处理的 issue'); return; }
+      if (!confirm(`将对最多 20 条 open issue 调用 LLM 生成改稿建议（已有 patch 的 issue 会自动跳过）。继续？`)) return;
+      this.batchSuggesting = true;
+      try {
+        const r = await this.api('POST', `/worlds/${this.currentWorldId}/issues/suggest_all_patches`, {});
+        const failed = (r.results || []).filter(x => !x.ok).length;
+        let msg = `处理 ${r.processed} / ${r.total_open}，新生成 ${r.total_created} 条建议`;
+        if (r.skipped_existing) msg += `；跳过 ${r.skipped_existing} 条已有`;
+        if (failed) msg += `；${failed} 条失败`;
+        this.flashToast(msg);
+        await this.refreshIssues();
+      } catch (e) {
+        alert('批量生成失败: ' + (e.message || e));
+      } finally {
+        this.batchSuggesting = false;
+      }
+    },
+
     openManuscript() {
       this.showManuscript = true;
     },
@@ -647,358 +763,8 @@ function sandbox() {
       await this.loadStats();
     },
 
-    async openMap() {
-      this.showMap = true;
-      this.mapInfo = null;
-      this.mapZoom = 1;
-      this.mapPan = { x: 0, y: 0 };
-      await this.loadMapMeta();
-      if (this.mapMeta?.exists) {
-        this.refreshMapImage();
-        await this.loadPinned();
-        await this.refreshSimStatus();
-      }
-    },
+    // map / 沙盘 / 钉位 / 仿真 方法已迁至 modules/map.js
 
-    async loadMapMeta() {
-      if (!this.currentWorldId) return;
-      try {
-        this.mapMeta = await this.api('GET', `/worlds/${this.currentWorldId}/map`);
-      } catch (e) {
-        console.warn('load map meta failed:', e);
-        this.mapMeta = null;
-      }
-    },
-
-    refreshMapImage() {
-      if (!this.currentWorldId || !this.mapMeta?.exists) {
-        this.mapImgUrl = '';
-        return;
-      }
-      this.mapImgUrl = `/api${`/worlds/${this.currentWorldId}/map/render.png?layer=${this.mapLayer}&t=${Date.now()}`}`;
-    },
-
-    setMapLayer(layer) {
-      this.mapLayer = layer;
-      this.refreshMapImage();
-    },
-
-    async generateMap() {
-      if (!this.currentWorldId || this.mapBusy) return;
-      this.mapBusy = true;
-      try {
-        const p = { ...this.mapGenParams };
-        if (!p.seed) p.seed = Math.floor(Math.random() * 1e9);
-        const r = await this.api('POST', `/worlds/${this.currentWorldId}/map/generate`, p);
-        this.mapGenParams.seed = p.seed;
-        await this.loadMapMeta();
-        this.refreshMapImage();
-        this.flashToast(`生成完成 ${r.width}x${r.height}`);
-      } catch (e) {
-        alert('生成地图失败: ' + e.message);
-      } finally {
-        this.mapBusy = false;
-      }
-    },
-
-    async generateMapFromText() {
-      if (!this.currentWorldId || this.mapBusy) return;
-      const w = this.world?.world;
-      if (!w || (!(w.outline || '').trim() && !(w.description || '').trim())) {
-        alert('需要先在"世界设置"里填写大纲或描述，AI 才能据此设计地图。');
-        return;
-      }
-      if (this.mapMeta?.exists && !confirm('已有地图，从文本生成会覆盖现有地形与自动地标。继续？')) return;
-
-      this.mapBusy = true;
-      this.mapTextStatus = '正在让 AI 设计地图蓝图…';
-      try {
-        const p = { ...this.mapGenParams };
-        if (!p.seed) p.seed = Math.floor(Math.random() * 1e9);
-
-        const bp = await this.api('POST', `/worlds/${this.currentWorldId}/map/blueprint`, {
-          width: p.width, height: p.height,
-        });
-        if (!bp || !Array.isArray(bp.regions)) throw new Error('蓝图为空');
-        this.mapTextStatus = `蓝图就绪：${bp.regions.length} 区域 / ${bp.landmarks.length} 地标，正在渲染…`;
-
-        const r = await this.api('POST', `/worlds/${this.currentWorldId}/map/generate_from_blueprint`, {
-          ...p, blueprint: { regions: bp.regions, landmarks: bp.landmarks },
-          create_landmark_entities: true,
-          replace_existing_landmarks: false,
-        });
-        this.mapGenParams.seed = p.seed;
-        await this.loadMapMeta();
-        this.refreshMapImage();
-        await this.loadWorld();  // refresh entities so new landmark pins appear
-        this.flashToast(`✨ 从文本生成：${r.regions_painted} 区域 · ${r.landmarks_created.length} 地标`);
-      } catch (e) {
-        alert('从文本生成失败: ' + e.message);
-      } finally {
-        this.mapBusy = false;
-        this.mapTextStatus = '';
-      }
-    },
-
-    async dropMap() {
-      if (!this.currentWorldId) return;
-      if (!confirm('确定删除这个世界的地图？')) return;
-      try {
-        await this.api('DELETE', `/worlds/${this.currentWorldId}/map`);
-        await this.loadMapMeta();
-        this.mapImgUrl = '';
-        this.mapInfo = null;
-      } catch (e) { alert('删除失败: ' + e.message); }
-    },
-
-    onMapFileSelected(evt) {
-      const f = evt.target.files?.[0];
-      this.mapImportFile = f || null;
-    },
-
-    async importHeightmap() {
-      if (!this.currentWorldId || !this.mapImportFile || this.mapBusy) return;
-      const p = this.mapImportParams;
-      if (p.width * p.height > 4_000_000) { alert('目标分辨率过大（最多 4M 像素）'); return; }
-      this.mapBusy = true;
-      try {
-        const fd = new FormData();
-        fd.append('file', this.mapImportFile);
-        fd.append('width', String(p.width));
-        fd.append('height', String(p.height));
-        fd.append('sea_level', String(p.sea_level));
-        fd.append('blur', String(p.blur));
-        fd.append('contrast', String(p.contrast));
-        fd.append('invert', String(!!p.invert));
-        fd.append('seed', String(p.seed || 0));
-        const r = await fetch(`/api/worlds/${this.currentWorldId}/map/import_heightmap`, {
-          method: 'POST', body: fd,
-        });
-        if (!r.ok) {
-          const t = await r.text();
-          throw new Error(t || ('HTTP ' + r.status));
-        }
-        const data = await r.json();
-        await this.loadMapMeta();
-        this.refreshMapImage();
-        await this.loadPinned();
-        this.flashToast(`已导入 ${data.width}×${data.height}`);
-      } catch (e) {
-        alert('导入失败: ' + e.message);
-      } finally {
-        this.mapBusy = false;
-      }
-    },
-
-    async inspectMapTile(evt) {
-      if (!this.currentWorldId || !this.mapMeta?.exists) return;
-      const img = evt.currentTarget;
-      const rect = img.getBoundingClientRect();
-      const cx = (evt.clientX - rect.left) / rect.width;
-      const cy = (evt.clientY - rect.top) / rect.height;
-      const x = Math.max(0, Math.min(this.mapMeta.width - 1, Math.floor(cx * this.mapMeta.width)));
-      const y = Math.max(0, Math.min(this.mapMeta.height - 1, Math.floor(cy * this.mapMeta.height)));
-      try {
-        this.mapInfo = await this.api('GET', `/worlds/${this.currentWorldId}/map/tile?x=${x}&y=${y}`);
-      } catch (e) { console.warn(e); }
-    },
-
-    mapZoomIn() { this.mapZoom = Math.min(8, this.mapZoom * 1.4); },
-    mapZoomOut() { this.mapZoom = Math.max(0.25, this.mapZoom / 1.4); },
-    mapZoomReset() { this.mapZoom = 1; this.mapPan = { x: 0, y: 0 }; },
-
-    mapWheel(evt) {
-      evt.preventDefault();
-      const dz = evt.deltaY < 0 ? 1.15 : 1 / 1.15;
-      this.mapZoom = Math.max(0.25, Math.min(8, this.mapZoom * dz));
-    },
-
-    _tileFromEvent(evt) {
-      const img = this.$refs.mapImg;
-      if (!img || !this.mapMeta?.exists) return null;
-      const rect = img.getBoundingClientRect();
-      const cx = (evt.clientX - rect.left) / rect.width;
-      const cy = (evt.clientY - rect.top) / rect.height;
-      const x = Math.floor(cx * this.mapMeta.width);
-      const y = Math.floor(cy * this.mapMeta.height);
-      if (x < 0 || y < 0 || x >= this.mapMeta.width || y >= this.mapMeta.height) return null;
-      return { x, y };
-    },
-
-    mapCanvasDown(evt) {
-      if (!this.mapMeta?.exists) return;
-      if (this.mapTool === 'paint') {
-        this.mapPainting = true;
-        const t = this._tileFromEvent(evt);
-        if (t) this._enqueuePaint(t.x, t.y);
-        evt.preventDefault();
-      } else {
-        this.mapDragging = true;
-        this._mapDragStart = { x: evt.clientX - this.mapPan.x, y: evt.clientY - this.mapPan.y };
-      }
-    },
-
-    mapCanvasMove(evt) {
-      const t = this._tileFromEvent(evt);
-      if (t) this.mapHover = t; else this.mapHover = { x: null, y: null };
-      if (this.mapPainting && t) {
-        this._enqueuePaint(t.x, t.y);
-      } else if (this.mapDragging) {
-        this.mapPan = {
-          x: evt.clientX - this._mapDragStart.x,
-          y: evt.clientY - this._mapDragStart.y,
-        };
-      }
-    },
-
-    async mapCanvasUp(evt) {
-      if (this.mapPainting) {
-        this.mapPainting = false;
-        await this._flushPaint();
-      } else if (this.mapDragging) {
-        const moved = Math.abs((evt.clientX - this._mapDragStart.x) - this.mapPan.x)
-          + Math.abs((evt.clientY - this._mapDragStart.y) - this.mapPan.y);
-        if (moved < 3 && this.mapTool === 'view') {
-          const t = this._tileFromEvent(evt);
-          if (t) this.inspectTile(t.x, t.y);
-        } else if (moved < 3 && this.mapTool === 'pin') {
-          const t = this._tileFromEvent(evt);
-          if (t) this.placePinHere(t.x, t.y);
-        } else if (moved < 3 && this.mapTool === 'goto') {
-          const t = this._tileFromEvent(evt);
-          if (t) this.commandGoto(t.x, t.y);
-        }
-        this.mapDragging = false;
-      }
-    },
-
-    async inspectTile(x, y) {
-      try {
-        this.mapInfo = await this.api('GET', `/worlds/${this.currentWorldId}/map/tile?x=${x}&y=${y}`);
-      } catch (e) { console.warn(e); }
-    },
-
-    _enqueuePaint(x, y) {
-      this._paintBuffer.push({ x, y, terrain: this.mapPaintTerrain, brush: this.mapBrushSize });
-      // throttle: flush every ~120ms while painting
-      if (!this._paintFlushTimer) {
-        this._paintFlushTimer = setTimeout(() => this._flushPaint(), 120);
-      }
-    },
-
-    async _flushPaint() {
-      if (this._paintFlushTimer) { clearTimeout(this._paintFlushTimer); this._paintFlushTimer = null; }
-      if (!this._paintBuffer.length) return;
-      const strokes = this._paintBuffer.splice(0);
-      try {
-        await this.api('POST', `/worlds/${this.currentWorldId}/map/paint`, { strokes });
-        this.refreshMapImage();
-      } catch (e) { console.warn('paint failed:', e); }
-    },
-
-    async clearOverlay() {
-      if (!confirm('确定还原所有涂改？')) return;
-      try {
-        await this.api('POST', `/worlds/${this.currentWorldId}/map/clear_overlay`, {});
-        this.refreshMapImage();
-      } catch (e) { alert('还原失败: ' + e.message); }
-    },
-
-    async loadPinned() {
-      if (!this.currentWorldId) return;
-      try {
-        const r = await this.api('GET', `/worlds/${this.currentWorldId}/map/pinned`);
-        this.pinnedEntities = r.items || [];
-      } catch (e) { this.pinnedEntities = []; }
-    },
-
-    openMapForPin(entity) {
-      if (!entity) return;
-      this.pinTargetEntity = entity;
-      this.mapTool = 'pin';
-      this.openMap();
-    },
-
-    openMapForGoto(entity) {
-      if (!entity) return;
-      if (entity.map_x == null || entity.map_y == null) {
-        this.flashToast('请先把该实体钉到地图上');
-        return;
-      }
-      this.gotoTargetEntity = entity;
-      this.mapTool = 'goto';
-      this.openMap();
-    },
-
-    async commandGoto(x, y) {
-      if (!this.gotoTargetEntity) {
-        this.flashToast('请先在实体面板点「🎯 指挥」选中目标');
-        return;
-      }
-      try {
-        await this.api('POST',
-          `/worlds/${this.currentWorldId}/map/entity/${this.gotoTargetEntity.id}/goto`,
-          { x, y, speed: this.gotoTargetEntity.move_speed || 2.0 });
-        this.flashToast(`${this.gotoTargetEntity.name} → (${x}, ${y})`);
-        await this.refreshSimStatus();
-      } catch (e) { alert('指挥失败: ' + e.message); }
-    },
-
-    async simStep(n) {
-      try {
-        await this.api('POST', `/worlds/${this.currentWorldId}/map/sim/tick`, { ticks: n });
-        await this.refreshSimStatus();
-        await this.loadPinned();
-      } catch (e) { console.warn('sim tick failed', e); }
-    },
-
-    simToggle() {
-      if (this.simPlaying) {
-        clearInterval(this.simInterval);
-        this.simInterval = null;
-        this.simPlaying = false;
-        return;
-      }
-      this.simPlaying = true;
-      this.simInterval = setInterval(() => {
-        if (!this.showMap) { this.simToggle(); return; }
-        this.simStep(2);
-      }, 500);
-    },
-
-    async refreshSimStatus() {
-      try {
-        const r = await this.api('GET', `/worlds/${this.currentWorldId}/map/sim/status`);
-        this.simStatus = r.items || [];
-      } catch (e) { /* silent */ }
-    },
-
-    async placePinHere(x, y) {
-      if (!this.pinTargetEntity) {
-        this.flashToast('请先在实体面板点「📍 钉位」选中目标');
-        return;
-      }
-      try {
-        await this.api('POST', `/worlds/${this.currentWorldId}/map/pin`, {
-          entity_id: this.pinTargetEntity.id, x, y,
-        });
-        this.pinTargetEntity.map_x = x;
-        this.pinTargetEntity.map_y = y;
-        this.flashToast(`已钉位 ${this.pinTargetEntity.name} → (${x}, ${y})`);
-        await this.loadPinned();
-        await this.loadWorld();
-      } catch (e) { alert('钉位失败: ' + e.message); }
-    },
-
-    async unpinEntity(entity) {
-      try {
-        await this.api('POST', `/worlds/${this.currentWorldId}/map/pin`, { entity_id: entity.id });
-        entity.map_x = null;
-        entity.map_y = null;
-        await this.loadPinned();
-        await this.loadWorld();
-      } catch (e) { alert('取消钉位失败: ' + e.message); }
-    },
 
     async loadStats() {
       if (!this.currentWorldId) return;
@@ -1094,6 +860,35 @@ function sandbox() {
 
     async refreshTimeline() {
       this.timeline = await this.api('GET', `/worlds/${this.currentWorldId}/timeline?branch_id=${this.currentBranchId}`);
+      this.loadThreadAging();
+      if (this.viewMode === 'swimlane') this.loadSwimlane();
+      if (this.viewMode === 'storyboard') this.loadStoryboard();
+    },
+
+    // C4: 伏笔超期
+    threadAging: { current_tick: 0, threads: [], counts: { fresh: 0, warn: 0, stale: 0 }, by_id: {} },
+    async loadThreadAging() {
+      if (!this.currentWorldId) return;
+      try {
+        const r = await this.api('GET', `/worlds/${this.currentWorldId}/threads/aging`);
+        const by_id = {};
+        for (const t of (r.threads || [])) by_id[t.id] = t;
+        this.threadAging = { ...r, by_id };
+      } catch (e) {
+        this.threadAging = { current_tick: 0, threads: [], counts: { fresh: 0, warn: 0, stale: 0 }, by_id: {} };
+      }
+    },
+    threadAgingLevel(threadId) { return this.threadAging.by_id[threadId]?.level || null; },
+    threadAgingAge(threadId) { return this.threadAging.by_id[threadId]?.age ?? null; },
+    threadAgingClass(level) {
+      return ({
+        fresh: 'text-amber-300',
+        warn: 'text-orange-300',
+        stale: 'text-rose-400',
+      }[level]) || 'text-zinc-400';
+    },
+    threadAgingDot(level) {
+      return ({ fresh: '●', warn: '◔', stale: '⚠' }[level]) || '●';
     },
 
     activeBranch() {
@@ -1897,6 +1692,72 @@ function sandbox() {
       this.showWorldSettings = true;
       // 异步加载风格列表（不阻塞弹窗显示）
       this.loadStyles();
+      this.loadLore();
+    },
+
+    // ---------- B3: 世界设定库 ----------
+    // B3 lore CRUD + B7 lore 缺口扫描已迁至 modules/lore.js
+
+    // ---------- C1: swimlane 视图 ----------
+    async loadSwimlane() {
+      if (!this.currentWorldId) return;
+      try {
+        const r = await this.api('GET', `/worlds/${this.currentWorldId}/swimlane?top_n=10`);
+        this.swimlane = r;
+        this.loadThreadAging();
+      } catch (e) {
+        this.swimlane = { max_tick: 0, lanes: [], global_chapters: [], global_issues: [], global_threads: [] };
+      }
+    },
+
+    // ---------- C2: 故事板 ----------
+    async loadStoryboard() {
+      if (!this.currentWorldId) return;
+      this.storyboardLoading = true;
+      try {
+        const r = await this.api('GET', `/worlds/${this.currentWorldId}/storyboard?top_events=12&top_characters=8`);
+        this.storyboard = r;
+      } catch (e) {
+        this.storyboard = { max_tick: 0, chapters: [] };
+      } finally {
+        this.storyboardLoading = false;
+      }
+    },
+
+    // C3: 章节过渡评估
+    transitionEvals: {},  // "i->j" -> { loading, data, error }
+    transitionKey(i, j) { return `${i}->${j}`; },
+    async evaluateChapterTransition(fromIndex, toIndex) {
+      if (!this.currentWorldId) return;
+      const key = this.transitionKey(fromIndex, toIndex);
+      this.transitionEvals = { ...this.transitionEvals, [key]: { loading: true, data: null, error: null } };
+      try {
+        const r = await this.api('POST', `/worlds/${this.currentWorldId}/storyboard/transitions/evaluate`,
+          { from_index: fromIndex, to_index: toIndex });
+        this.transitionEvals = { ...this.transitionEvals, [key]: { loading: false, data: r, error: null } };
+      } catch (e) {
+        this.transitionEvals = { ...this.transitionEvals, [key]: { loading: false, data: null, error: e.message || String(e) } };
+      }
+    },
+    transitionScoreClass(score) {
+      if (score === null || score === undefined) return 'text-zinc-500';
+      if (score >= 80) return 'text-emerald-400';
+      if (score >= 60) return 'text-amber-400';
+      return 'text-rose-400';
+    },
+
+    swimlanePct(tick) {
+      const m = Math.max(1, this.swimlane.max_tick || 1);
+      return Math.max(0, Math.min(100, (tick / m) * 100));
+    },
+    swimlaneAxisTicks() {
+      const m = this.swimlane.max_tick || 0;
+      if (m <= 0) return [];
+      const step = m <= 10 ? 1 : m <= 30 ? 5 : m <= 100 ? 10 : 25;
+      const ticks = [];
+      for (let t = 0; t <= m; t += step) ticks.push(t);
+      if (ticks[ticks.length - 1] !== m) ticks.push(m);
+      return ticks;
     },
 
     async loadStyles() {
@@ -2729,6 +2590,8 @@ function sandbox() {
         });
         this.flashToast('📖 章节标记已添加');
         if (this.viewMode === 'gantt') await this.renderGantt();
+        if (this.viewMode === 'swimlane') await this.loadSwimlane();
+        if (this.viewMode === 'storyboard') await this.loadStoryboard();
         if (this.loadChapters) await this.loadChapters();
       } catch (e) {
         alert('添加失败: ' + e.message);
@@ -2858,6 +2721,8 @@ function sandbox() {
         });
         this.flashToast('📖 章节标记已添加');
         if (this.viewMode === 'gantt') await this.renderGantt();
+        if (this.viewMode === 'swimlane') await this.loadSwimlane();
+        if (this.viewMode === 'storyboard') await this.loadStoryboard();
         if (this.loadChapters) await this.loadChapters();
       } catch (e) {
         alert('添加失败: ' + e.message);
@@ -2875,12 +2740,21 @@ function sandbox() {
     },
 
     async autoMarkChapters() {
-      if (!confirm(`让 AI 自动分章（约 ${this.autoChapterTarget} 章）？\n这会清空现有章末标记。`)) return;
+      if (!confirm(`让 AI 自动分章（约 ${this.autoChapterTarget} 章）？\n这会清空现有章末标记，并为每章生成一句回顾。`)) return;
       this.chaptersLoading = true;
       try {
         const r = await this.api('POST', `/worlds/${this.currentWorldId}/chapters/auto`,
-          { target_count: this.autoChapterTarget, provider: this.provider }, 120000);
-        this.flashToast(`AI 分了 ${(r.chapters || []).length} 章`);
+          { target_count: this.autoChapterTarget, provider: this.provider }, 300000);
+        const n = (r.chapters || []).length;
+        let note = '';
+        if (r.summaries_skipped_reason === 'disabled_by_rule') {
+          note = '（按规则未生成回顾）';
+        } else if (n > 0) {
+          const ok = r.summaries_generated || 0;
+          const fail = r.summaries_failed || 0;
+          note = ` · ${ok} 段回顾` + (fail ? `（${fail} 失败）` : '');
+        }
+        this.flashToast(`AI 分了 ${n} 章${note}`);
         await this.loadChapters();
       } catch (e) {
         alert('AI 分章失败: ' + e.message);
@@ -3050,6 +2924,20 @@ function sandbox() {
         alert('读取模板库失败: ' + e.message);
       } finally {
         this.templatesLoading = false;
+      }
+    },
+
+    async seedOfficialTemplates(force = false) {
+      try {
+        const r = await this.api('POST', `/templates/seed_official${force ? '?force=true' : ''}`);
+        if (force) {
+          this.flashToast(`已重置 ${r.refreshed} 个官方模板`);
+        } else {
+          this.flashToast(r.inserted > 0 ? `已注入 ${r.inserted} 个官方模板` : '官方模板齐全 ✓');
+        }
+        await this.refreshTemplates();
+      } catch (e) {
+        alert('注入官方模板失败: ' + e.message);
       }
     },
 
@@ -3855,4 +3743,11 @@ function sandbox() {
       await this.loadWorld();
     },
   };
+  // E2: 合并各 mixin 模块（modules/*.js 在 index.html 中先于 app.js 加载）
+  return Object.assign(
+    base,
+    window.DialogueMixin || {},
+    window.LoreMixin || {},
+    window.MapMixin || {},
+  );
 }

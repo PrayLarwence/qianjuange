@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from app.engine.simulator import run_step
+from app.engine.core.simulator import run_step
 from app.providers.base import LLMResponse, ToolCall
 from app.models import Entity, Event, NarrativeLog
 

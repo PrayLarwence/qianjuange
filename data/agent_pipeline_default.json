@@ -1,0 +1,24 @@
+{
+  "directors": [
+    {
+      "name": "director",
+      "model": "",
+      "system_prompt_extra": "",
+      "max_hops": 8
+    }
+  ],
+  "authors": [
+    {
+      "name": "author",
+      "model": "",
+      "system_prompt_extra": ""
+    }
+  ],
+  "critics": [],
+  "max_critic_retries": 3,
+  "critic_mode": "parallel",
+  "budget": {
+    "max_llm_calls": 20,
+    "max_wall_seconds": 300
+  }
+}
