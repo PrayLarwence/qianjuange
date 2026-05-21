@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useThemeStore, type ThemeMode } from '@/stores/theme';
 import { useUiStore } from '@/stores/ui';
+import { llmApi, type LLMConfig, type ProviderMeta } from '@/services/api';
 
 const ui = useUiStore();
 const theme = useThemeStore();
@@ -12,6 +13,88 @@ const modes: { value: ThemeMode; label: string; hint: string }[] = [
   { value: 'dark',   label: '深色',     hint: '夜间，暖黑底' },
   { value: 'system', label: '跟随系统', hint: '随操作系统变化' },
 ];
+
+// ─── LLM 状态 ───
+const llmConfig = ref<LLMConfig | null>(null);
+const llmMeta = ref<Record<string, ProviderMeta>>({});
+const llmLoading = ref(false);
+const llmError = ref('');
+const testResult = ref<{ ok: boolean; reply?: string; error?: string; elapsed?: number } | null>(null);
+const providerList = ref<string[]>([]);
+
+// 编辑中的 provider
+const editingProvider = ref<string>('');
+const editModel = ref('');
+const editKey = ref('');
+const editUrl = ref('');
+
+async function loadLLM() {
+  llmLoading.value = true;
+  llmError.value = '';
+  try {
+    const [cfg, prov] = await Promise.all([
+      llmApi.getConfig(),
+      llmApi.providers(),
+    ]);
+    llmConfig.value = cfg.config;
+    llmMeta.value = cfg.meta || {};
+    providerList.value = prov.available;
+    if (prov.current) startEdit(prov.current);
+  } catch (e: any) {
+    llmError.value = e.message || String(e);
+  } finally {
+    llmLoading.value = false;
+  }
+}
+
+function startEdit(name: string) {
+  editingProvider.value = name;
+  const p = llmConfig.value?.providers?.[name];
+  editModel.value = p?.model || '';
+  editKey.value = p?.has_key ? '' : '';
+  editUrl.value = p?.base_url || '';
+}
+
+async function saveProvider() {
+  llmError.value = '';
+  try {
+    const body: any = { active: editingProvider.value, providers: {} };
+    const p: any = {};
+    if (editKey.value) p.api_key = editKey.value;
+    if (editModel.value) p.model = editModel.value;
+    if (editUrl.value) p.base_url = editUrl.value;
+    if (Object.keys(p).length) body.providers[editingProvider.value] = p;
+    await llmApi.setConfig(body);
+    editKey.value = '';
+    await loadLLM();
+  } catch (e: any) {
+    llmError.value = e.message || String(e);
+  }
+}
+
+async function switchProvider(name: string) {
+  await llmApi.setConfig({ active: name });
+  startEdit(name);
+  await loadLLM();
+}
+
+async function testProvider() {
+  testResult.value = null;
+  llmError.value = '';
+  try {
+    testResult.value = await llmApi.test(editingProvider.value);
+  } catch (e: any) {
+    testResult.value = { ok: false, error: e.message || String(e) };
+  }
+}
+
+// ─── metrics ───
+const metrics = ref<any>(null);
+async function loadMetrics() {
+  try { metrics.value = await llmApi.metrics(); } catch {}
+}
+watch(() => tab.value, v => { if (v === 'data') loadMetrics(); });
+onMounted(() => loadLLM());
 </script>
 
 <template>
@@ -42,6 +125,7 @@ const modes: { value: ThemeMode; label: string; hint: string }[] = [
         </div>
 
         <div class="flex-1 overflow-y-auto p-4 text-sm">
+          <!-- 外观 -->
           <section v-if="tab === 'appearance'" class="space-y-5">
             <div>
               <h3 class="text-muted text-xs uppercase tracking-wider mb-2">主题</h3>
@@ -55,17 +139,78 @@ const modes: { value: ThemeMode; label: string; hint: string }[] = [
                 </button>
               </div>
             </div>
-            <div class="text-xs text-muted">
-              当前解析为 <span class="text-text">{{ theme.resolved }}</span>。顶栏的 ☀/🌙 按钮可在浅深之间快切。
-            </div>
+            <div class="text-xs text-muted">当前 <span class="text-text">{{ theme.resolved }}</span></div>
           </section>
 
-          <section v-else-if="tab === 'llm'" class="space-y-3">
-            <div class="text-muted">LLM 设置（provider、API key、模型、温度）将接入到下一阶段，目前先沿用旧版。</div>
+          <!-- LLM -->
+          <section v-else-if="tab === 'llm'" class="space-y-4">
+            <div v-if="llmLoading" class="text-muted">加载中…</div>
+            <div v-if="llmError" class="text-red-500 text-xs">{{ llmError }}</div>
+            <template v-if="llmConfig">
+              <!-- provider 选择 -->
+              <div>
+                <h3 class="text-muted text-xs uppercase tracking-wider mb-2">当前 Provider</h3>
+                <select class="w-full h-9 px-2 rounded border border-border bg-transparent text-sm"
+                        :value="llmConfig.active"
+                        @change="switchProvider(($event.target as HTMLSelectElement).value)">
+                  <option v-for="name in providerList" :key="name" :value="name">
+                    {{ llmMeta[name]?.label || name }}
+                  </option>
+                </select>
+              </div>
+
+              <!-- 模型 -->
+              <div>
+                <label class="text-muted text-xs uppercase tracking-wider mb-1 block">模型</label>
+                <input v-model="editModel" class="w-full h-9 px-2 rounded border border-border bg-transparent text-sm"
+                       :placeholder="llmConfig.providers?.[editingProvider]?.model || ''" />
+              </div>
+
+              <!-- API Key -->
+              <div>
+                <label class="text-muted text-xs uppercase tracking-wider mb-1 block">
+                  API Key
+                  <span v-if="llmConfig.providers?.[editingProvider]?.has_key" class="text-green-600">（已配置）</span>
+                </label>
+                <input v-model="editKey" type="password"
+                       class="w-full h-9 px-2 rounded border border-border bg-transparent text-sm"
+                       placeholder="粘贴新 Key（留空不修改）" />
+              </div>
+
+              <!-- Base URL (non-Ollama) -->
+              <div v-if="editingProvider !== 'ollama'">
+                <label class="text-muted text-xs uppercase tracking-wider mb-1 block">Base URL</label>
+                <input v-model="editUrl" class="w-full h-9 px-2 rounded border border-border bg-transparent text-sm"
+                       :placeholder="llmConfig.providers?.[editingProvider]?.base_url || ''" />
+              </div>
+
+              <!-- Actions -->
+              <div class="flex gap-2">
+                <button class="btn btn-ghost text-xs" @click="testProvider" :disabled="testResult?.ok === true">
+                  {{ testResult?.ok ? '✓ 连接成功' : '测试连接' }}
+                </button>
+                <button class="btn btn-accent text-xs" @click="saveProvider">保存</button>
+              </div>
+
+              <!-- Test result -->
+              <div v-if="testResult && !testResult.ok" class="text-red-500 text-xs break-all">
+                {{ testResult.error }}
+              </div>
+              <div v-if="testResult?.ok" class="text-green-600 text-xs">
+                连接成功 · {{ testResult.elapsed }}s · {{ testResult.reply }}
+              </div>
+
+              <!-- Homepage link -->
+              <div v-if="llmMeta[editingProvider]?.homepage" class="text-xs text-muted">
+                <a :href="llmMeta[editingProvider].homepage" target="_blank" class="underline">
+                  ↗ {{ llmMeta[editingProvider].homepage }}
+                </a>
+              </div>
+            </template>
           </section>
 
+          <!-- 快捷键 -->
           <section v-else-if="tab === 'shortcut'" class="space-y-3">
-            <div class="text-muted">键盘快捷键：</div>
             <ul class="space-y-1 text-sm">
               <li><kbd class="px-1.5 py-0.5 rounded bg-sunken text-xs">⌘/Ctrl + K</kbd> 命令面板（待接）</li>
               <li><kbd class="px-1.5 py-0.5 rounded bg-sunken text-xs">⌘/Ctrl + ,</kbd> 打开设置</li>
@@ -73,9 +218,32 @@ const modes: { value: ThemeMode; label: string; hint: string }[] = [
             </ul>
           </section>
 
-          <section v-else class="space-y-3">
-            <div class="text-muted">数据管理：导入 / 导出 / 快照将在迁完后接入。</div>
-            <a href="/legacy/" class="btn btn-ghost">↗ 打开旧版界面</a>
+          <!-- 数据 -->
+          <section v-else class="space-y-4">
+            <div>
+              <h3 class="text-muted text-xs uppercase tracking-wider mb-2">LLM 调用统计（24h）</h3>
+              <div v-if="metrics?.summary" class="space-y-1">
+                <div class="grid grid-cols-2 gap-1 text-xs">
+                  <div class="text-muted">调用次数</div><div>{{ metrics.summary.total_calls }}</div>
+                  <div class="text-muted">输入 token</div><div>{{ metrics.summary.total_tokens_in?.toLocaleString() }}</div>
+                  <div class="text-muted">输出 token</div><div>{{ metrics.summary.total_tokens_out?.toLocaleString() }}</div>
+                  <div class="text-muted">错误数</div><div :class="metrics.summary.errors ? 'text-red-500' : ''">{{ metrics.summary.errors }}</div>
+                  <div class="text-muted">平均延迟</div><div>{{ metrics.summary.avg_latency_ms }}ms</div>
+                </div>
+
+                <div v-if="Object.keys(metrics.by_provider || {}).length" class="mt-3">
+                  <h4 class="text-muted text-xs uppercase tracking-wider mb-1">按 Provider</h4>
+                  <div v-for="(d, p) in metrics.by_provider" :key="p" class="flex justify-between text-xs py-1 border-t border-border/50">
+                    <span>{{ p }}</span>
+                    <span class="text-muted">{{ d.calls }} 次 · {{ ((d.tokens_in + d.tokens_out) || 0).toLocaleString() }} tokens</span>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="text-xs text-muted">暂无调用记录</div>
+            </div>
+            <div class="pt-3 border-t border-border">
+              <a href="/legacy/" class="btn btn-ghost text-xs">↗ 打开旧版（完整数据管理）</a>
+            </div>
           </section>
         </div>
       </aside>

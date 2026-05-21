@@ -713,3 +713,42 @@ export const storyboardApi = {
     }>(`/api/worlds/${worldId}/storyboard${q ? '?' + q : ''}`);
   },
 };
+
+// ─── LLM 配置 + metrics ────────────────────────────────────────
+
+export interface LLMConfig {
+  active: string;
+  providers: Record<string, {
+    api_key_preview?: string;
+    has_key?: boolean;
+    model?: string;
+    base_url?: string;
+  }>;
+}
+
+export interface ProviderMeta {
+  label: string;
+  needs_api_key: boolean;
+  default_models: string[];
+  homepage: string;
+}
+
+export const llmApi = {
+  getConfig: () =>
+    api.get<{ config: LLMConfig; meta: Record<string, ProviderMeta> }>('/api/llm_config'),
+  setConfig: (body: { active?: string; providers?: Record<string, any> }) =>
+    api.post<{ ok: boolean; config: LLMConfig }>('/api/llm_config', body),
+  test: (provider: string) =>
+    api.post<{ ok: boolean; reply?: string; error?: string; elapsed?: number }>(
+      '/api/llm_config/test', { provider },
+    ),
+  providers: () =>
+    api.get<{ current: string; available: string[]; models: Record<string, string> }>('/api/providers'),
+  metrics: (params?: { hours?: number; provider?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.hours) qs.set('hours', String(params.hours));
+    if (params?.provider) qs.set('provider', params.provider);
+    return api.get<any>(`/api/metrics${qs.toString() ? '?' + qs : ''}`);
+  },
+};
+
