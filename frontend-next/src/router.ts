@@ -5,6 +5,7 @@ const WorldsLibrary = () => import('@/views/WorldsLibraryView.vue');
 const SettingsPage  = () => import('@/views/SettingsView.vue');
 const WorldShell    = () => import('@/views/world/WorldShell.vue');
 
+const Dashboard = () => import('@/views/world/DashboardView.vue');
 const Overview = () => import('@/views/world/OverviewView.vue');
 const Chapters = () => import('@/views/world/ChaptersView.vue');
 const Graph    = () => import('@/views/world/GraphView.vue');
@@ -26,7 +27,8 @@ const routes: RouteRecordRaw[] = [
     path: '/worlds/:id',
     component: WorldShell,
     children: [
-      { path: '',          name: 'world.overview', component: Overview },
+      { path: '',          name: 'world.overview', component: Dashboard },
+      { path: 'overview-old', name: 'world.overview-old', component: Overview },
       { path: 'chapters',  name: 'world.chapters', component: Chapters },
       { path: 'graph',     name: 'world.graph',    component: Graph },
       { path: 'timeline',  name: 'world.timeline', component: Timeline },

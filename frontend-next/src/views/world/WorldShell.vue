@@ -13,7 +13,7 @@ const err = ref('');
 const worldId = computed(() => route.params.id as string);
 
 const items = [
-  { to: '',          label: '概览',     icon: '◐' },
+  { to: '',          label: '仪表盘',   icon: '◐' },
   { to: 'chapters',  label: '章节',     icon: '✎' },
   { to: 'graph',     label: '图谱',     icon: '◇' },
   { to: 'timeline',  label: '时间轴',   icon: '─' },
