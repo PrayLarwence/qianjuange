@@ -65,9 +65,10 @@
 
 ### 可疑点
 1. **`Event.consequences` JSON vs `CausalLink` 表**：两套描述因果，前者 inline、后者 normalized。AI 工具调用会两边都写，**容易不同步**
-2. **`Entity.attributes` JSON 什么都塞**：aliases、persona 片段、自定义属性、临时状态。**T2-B 又往里加了 aliases**。这字段会越来越乱，**应该考虑把 aliases / persona 拆成独立列**
-3. **`World.manuscript_chunks` / `manuscript_draft_events` 都用 JSON 列**：手稿是几十 MB 级别的，存 SQLite 单行 JSON 不太健康。**长小说会拖慢整张表的查询**
+2. **`Entity.attributes` JSON 什么都塞**：aliases、persona 片段、自定义属性、临时状态。**T2-B 又往里加了 aliases**。这字段会越来越乱，**应该考虑把 aliases / persona 拆成独立列**（aliases 已在 R 系列拆出）
+3. ~~**`World.manuscript_chunks` / `manuscript_draft_events` 都用 JSON 列**~~：~~已迁移~~ 现已独立成 `manuscript_chunks` 表（R 系列）。但 **新发现**：`text` 列声明 TEXT 没做编码校验，某次失败的 epub 导入把二进制流（含 NUL 字节）直接塞了进去，单库膨胀 100MB。**需要在 ingest 路径加 utf-8 解码兜底 + 入库前校验无 NUL**（未做）
 4. **`current_tick` / `max_tick` 维护分散**：commit_events、advance_time、各种工具调用都在改，**容易出现 max_tick < 实际最大 event.tick 的不一致**
+5. **删 world 时级联清理不全**：`worlds` 行删了但 `manuscript_chunks` / `snapshots` / `chapter_markers` / `plot_threads` / `agent_traces` 等的孤儿行不会被自动清，长期累积。**需要 ON DELETE CASCADE 或显式级联**（2026-05 体检发现，已手动清，未做根治）
 
 ### 索引
 - `events_branch_tick`、`plot_threads_branch_status` 都有
@@ -271,7 +272,7 @@ backend/tests/  6020 行  115+ 条
 1. **手稿 V1 长小说**：3 批以上耗时 3-5 分钟，sync endpoint 会超时
 2. **state.py 序列化大世界**：500+ 实体时 prompt 准备本身就慢
 3. **`Snapshot.payload` JSON**：恢复一个大快照要解 50-100 KB JSON
-4. **`World.manuscript_chunks` JSON**：百万字小说存这里会让 World 表行变得巨大
+4. ~~**`World.manuscript_chunks` JSON**~~：已独立成表（R 系列）。新隐患：`text` 列没编码校验，二进制污染会让单行膨胀几 MB（见可疑点 #3）
 
 ### 成本
 - 一次完整手稿导入（V1 + V2 + 因果链）粗估 300k - 800k tokens 输入，**单次 3-8 美元**

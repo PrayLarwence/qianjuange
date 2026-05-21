@@ -126,6 +126,7 @@ LLM 不直接写 SQL，而是输出 ToolCall（name + arguments），由 `engine
 - 函数：`engine/core/state.py::build_state_snapshot()`
 - 默认截断到最近 30 事件 + 80 实体（控 token）
 - `state_as_prompt()` 把它转成 markdown 喂 LLM
+- 实体含 `alive` 字段（0/1），snapshot 返回**全员**（含已死），让前端能区分；prompt 渲染时（实体块、persona quickref、地图 entities_on_map）显式过滤 `alive=0`，LLM 看到的还是只活的
 
 ### Multi-Agent（多 agent 流程）
 SimView 一个入口，三种模式可切：

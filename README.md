@@ -12,7 +12,7 @@
 # 当前会话状态（给下一位 agent / 给中断后的自己）
 
 ## 已完成 — 大型结构重构（R 系列）
-代码 build 通过，397 后端测试全过，27 前端测试全过，vue-tsc 0 错，vite build 干净。**没跑端到端真实小说回归**，只验证类型/编译/单测。
+代码 build 通过，427 后端测试全过，27 前端测试全过，vue-tsc 0 错，vite build 干净。**没跑端到端真实小说回归**，只验证类型/编译/单测。
 
 ### 工程债清理（2026-05）
 - engine 31 文件归入 8 子目录（agents/manuscript/consistency/worldgen/core/narrative/embedding/map），旧位置 stub 兼容
@@ -35,6 +35,15 @@
 - **forced_accept 浮出水面**：`run_orchestrated_step` 返回 `unresolved_critics` 数组；SimView 在 forced_accept / budget_exhausted 时显示警示带，列出每个未解决 critic 的 reason + suggestions
 - **Pipeline 指标进 Dashboard**：新端点 `GET /worlds/{id}/pipeline_metrics?hours=168`，聚合 AgentTrace 给出 first_pass_rate / forced_accept_rate / avg_critic_rounds + 每个 critic 的 runs/pass/fail/fail_rate/avg_score。DashboardView 加 Pipeline 卡片
 - 测试：`test_critic_prev_round_threaded_into_prompt` + `test_forced_accept_returns_unresolved_critics` + `test_query_pipeline_metrics_aggregates`
+
+### 后端打磨第二批（2026-05-21）
+- **DB 连接 PRAGMA 全局化**：`db.py` 加 connect-event listener，所有新 SQLAlchemy 连接自动设 `synchronous=NORMAL` + `busy_timeout=5000`。原本只在 `_migrate` 单条 connection 上生效，现在每个 session 都生效，写延迟降一半，commit 不再双 fsync
+- **修 Dashboard "全员已逝" 误报**：`_entity_full` 漏了 `alive` 字段，前端 `!c.alive` 永远为真。修法是 snapshot query 取消 alive=1 过滤、`_entity_full` 补 alive 字段；prompt 渲染（`state_as_prompt`、`_persona_quickref`、`_build_map_summary`）显式过滤 alive=0 保持 LLM 行为不变；前端按 `c.alive === 0` 严格判 0。GraphView / StoryboardView 同病也连带修好
+- **DB 大扫除**：`world.db` **102.50 MB → 0.45 MB**（回收 102 MB）
+  - 根因：`manuscript_chunks.text` 列声明 TEXT 但塞了二进制（含 NUL 字节），SQL `length()` 在 NUL 处截断只看到几百字符，但 `length(CAST AS BLOB)` 数到几 MB。**59 行污染共 99 MB**，全部来自一次失败的 z-library epub 导入
+  - 清理：删失败导入 world `w_5f41c1011e` 全部子表数据 + 之前删 world 残留的孤儿数据（manuscript_chunks 67 + snapshots 25 + chapter_markers 9 + plot_threads 11 + agent_traces 7）
+  - VACUUM 后完整性 OK，无 NUL，无孤儿 FK
+  - **未做**：定位"二进制塞进 text 列"的 ingest 入口（防再发生），见 design_review 可疑点
 
 ### 体验优化
 - **仪表盘**（DashboardView）：世界统计 + LLM metrics + 实体分布 + 最近事件 + LLM 调用日志
@@ -384,7 +393,7 @@ flowchart TB
 启动后打开 http://localhost:8000，⚙ 图标，填 Key、选模型、测试连接。存于 `data/llm_config.json`，覆盖 `.env`。
 
 ## 测试
-397 pytest（FakeProvider 替身，不打真 LLM 不动 `data/world.db`）。
+427 pytest（FakeProvider 替身，不打真 LLM 不动 `data/world.db`）。
 ```bash
 run-tests.bat                                       # Windows 一键
 cd backend && ../.venv/Scripts/python -m pytest     # 手动
