@@ -6,10 +6,12 @@
 - POST /worlds/{id}/export
 """
 from __future__ import annotations
+import io
 import json
 import logging
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -67,7 +69,7 @@ def get_style_profile(style_id: str, db: Session = Depends(get_db)):
 
 
 class ExportRequest(BaseModel):
-    mode: str = "raw"
+    mode: str = "raw"  # raw|json|novelize|docx|epub
     tick_from: int | None = None
     tick_to: int | None = None
     chapter_size: int = 5
@@ -167,6 +169,14 @@ def export_world(world_id: str, payload: ExportRequest, db: Session = Depends(ge
             "filename": f"{world.name}_{tick_lo}-{tick_hi}.md",
             "content": "\n".join(lines),
         }
+
+    if payload.mode == "docx":
+        return _export_docx(world, events, narration, entities, by_id,
+                            tick_lo, tick_hi, branch, payload)
+
+    if payload.mode == "epub":
+        return _export_epub(world, events, narration, entities, by_id,
+                            tick_lo, tick_hi, branch, payload)
 
     if payload.mode == "novelize":
         if not events and not narration:
@@ -314,4 +324,158 @@ def export_world(world_id: str, payload: ExportRequest, db: Session = Depends(ge
         }
 
     raise HTTPException(400, f"unknown mode: {payload.mode}")
+
+
+# ─── DOCX 导出 ──────────────────────────────────────────────────
+
+def _export_docx(world, events, narration, entities, by_id, tick_lo, tick_hi, branch, payload):
+    from docx import Document
+    from docx.shared import Pt, Inches, Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    doc = Document()
+    style = doc.styles['Normal']
+    style.font.name = 'SimSun'
+    style.font.size = Pt(12)
+    style.paragraph_format.line_spacing = 1.5
+
+    # 标题页
+    title = doc.add_heading(world.name or "未命名", level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if world.description:
+        p = doc.add_paragraph(world.description)
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.add_run(f"分支：{branch.name if branch else 'main'} · tick {tick_lo}–{tick_hi}").italic = True
+    doc.add_page_break()
+
+    if payload.include_entities:
+        chars = [e for e in entities if e.type == "character"]
+        if chars:
+            doc.add_heading("主要人物", level=1)
+            for e in chars:
+                state = "" if e.alive else "（已逝）"
+                p = doc.add_paragraph()
+                p.add_run(f"• {e.name}").bold = True
+                p.add_run(f"{state}  {e.summary or ''}")
+
+    doc.add_heading("正文", level=1)
+
+    ticks = sorted(set([ev.tick for ev in events] + [n.tick for n in narration]))
+    ev_by_tick = {}
+    for ev in events:
+        ev_by_tick.setdefault(ev.tick, []).append(ev)
+    nar_by_tick = {}
+    for n in narration:
+        nar_by_tick.setdefault(n.tick, []).append(n)
+
+    for t in ticks:
+        if payload.include_narration:
+            for n in nar_by_tick.get(t, []):
+                if n.text and n.text.strip():
+                    doc.add_paragraph(n.text.strip())
+        if payload.include_events:
+            for ev in ev_by_tick.get(t, []):
+                parts = "、".join(by_id[p].name for p in (ev.participants or []) if p in by_id)
+                loc = by_id.get(ev.location_id).name if ev.location_id and ev.location_id in by_id else ""
+                meta = " ".join(f"[{x}]" for x in [parts, loc] if x)
+                p = doc.add_paragraph()
+                p.add_run(f"■ {ev.title} {meta}").bold = True
+                if ev.description:
+                    doc.add_paragraph(f"  {ev.description}")
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{world.name}_{tick_lo}-{tick_hi}.docx"'},
+    )
+
+
+# ─── EPUB 导出 ──────────────────────────────────────────────────
+
+def _export_epub(world, events, narration, entities, by_id, tick_lo, tick_hi, branch, payload):
+    import zipfile
+    import uuid as _uuid
+
+    book_id = f"urn:uuid:{_uuid.uuid4()}"
+    safe_name = world.name.replace(" ", "_").replace("/", "_")[:40]
+
+    ticks = sorted(set([ev.tick for ev in events] + [n.tick for n in narration]))
+    ev_by_tick = {}
+    for ev in events:
+        ev_by_tick.setdefault(ev.tick, []).append(ev)
+    nar_by_tick = {}
+    for n in narration:
+        nar_by_tick.setdefault(n.tick, []).append(n)
+
+    # 构建 XHTML body
+    body_lines = [f'<h1>{world.name or "未命名"}</h1>']
+    if world.description:
+        body_lines.append(f'<p><em>{world.description}</em></p>')
+
+    if payload.include_entities:
+        chars = [e for e in entities if e.type == "character"]
+        if chars:
+            body_lines.append('<h2>主要人物</h2><ul>')
+            for e in chars:
+                state = "" if e.alive else "（已逝）"
+                body_lines.append(f'<li><strong>{e.name}</strong>{state} — {e.summary or ""}</li>')
+            body_lines.append('</ul>')
+
+    body_lines.append('<h2>正文</h2>')
+    for t in ticks:
+        if payload.include_narration:
+            for n in nar_by_tick.get(t, []):
+                if n.text and n.text.strip():
+                    body_lines.append(f'<p>{n.text.strip()}</p>')
+        if payload.include_events:
+            for ev in ev_by_tick.get(t, []):
+                body_lines.append(f'<p><em>■ {ev.title}</em></p>')
+                if ev.description:
+                    body_lines.append(f'<p>{ev.description}</p>')
+
+    body_html = "\n".join(body_lines)
+
+    chapter_xhtml = f'''<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="zh-CN">
+<head><title>{world.name}</title></head>
+<body>{body_html}</body>
+</html>'''
+
+    container_xml = '''<?xml version="1.0" encoding="utf-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>'''
+
+    content_opf = f'''<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="book-id">{book_id}</dc:identifier>
+    <dc:title>{world.name}</dc:title>
+    <dc:language>zh-CN</dc:language>
+  </metadata>
+  <manifest>
+    <item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="chapter"/></spine>
+</package>'''
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('mimetype', 'application/epub+zip', compress_type=zipfile.ZIP_STORED)
+        zf.writestr('META-INF/container.xml', container_xml)
+        zf.writestr('OEBPS/content.opf', content_opf)
+        zf.writestr('OEBPS/chapter.xhtml', chapter_xhtml)
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/epub+zip",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_{tick_lo}-{tick_hi}.epub"'},
+    )
 
