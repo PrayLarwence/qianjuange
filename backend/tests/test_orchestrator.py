@@ -65,10 +65,21 @@ def test_pipeline_validation_critic_bounds():
 
 
 def test_pipeline_validation_author_must_be_one():
+    # 0 个 author 失败
     with pytest.raises(Exception):
         PipelineConfig(directors=[DirectorAgent()], authors=[])
+    # 超过 MAX_AUTHORS 失败
     with pytest.raises(Exception):
-        PipelineConfig(directors=[DirectorAgent()], authors=[AuthorAgent(), AuthorAgent()])
+        PipelineConfig(
+            directors=[DirectorAgent()],
+            authors=[AuthorAgent()] * (LIMITS["max_authors"] + 1),
+        )
+    # 边界值 OK
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()],
+        authors=[AuthorAgent()] * LIMITS["max_authors"],
+    )
+    assert len(cfg.authors) == LIMITS["max_authors"]
 
 
 def test_resolve_for_world_falls_back_to_default():
@@ -891,3 +902,151 @@ def test_best_of_k_metrics_excludes_ranking_traces(db, world_factory):
     # by_critic.runs 把 ranking 的两次评分都算进来（每个候选评一次都是 critic 的真实输出）
     assert m["by_critic"]["strict"]["runs"] == 2
     assert m["by_critic"]["strict"]["pass"] == 2
+
+
+# ===== 多 Author 投票（路线 #6 MVP）=====
+
+def test_multi_author_vote_picks_higher_score(db, world_factory):
+    """N=2 author（system_prompt_extra 不同）+ 1 critic：cand_a fail / cand_b pass → 选 cand_b。"""
+    w, br = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()],
+        authors=[
+            AuthorAgent(name="dialogue_first", system_prompt_extra="多写对白"),
+            AuthorAgent(name="vivid_desc", system_prompt_extra="多写景物描写"),
+        ],
+        critics=[CriticAgent(name="strict")],
+        author_best_of=1,
+        max_critic_retries=2,
+    )
+    p = _best_of_k_provider(
+        candidate_texts=[
+            "稿子 A：林冲缓缓提刀。",
+            "稿子 B：夜风掠过苍青城墙，林冲缓缓握紧雁翎刀的金线。",
+        ],
+        critic_responses_per_candidate=[
+            ['{"verdict":"fail","score":4,"reason":"太散","suggestions":"凝练"}'],
+            ['{"verdict":"pass","score":9,"reason":"很好","suggestions":""}'],
+        ],
+    )
+    res = run_orchestrated_step(db, w, "测试", job_id="j_ma1", cfg=cfg, provider=p)
+    assert res["final_verdict"] == "pass"
+    assert res["critic_rounds"] == 1
+    af = db.query(NarrativeLog).filter_by(branch_id=br.id, role="author_final").first()
+    assert af is not None and "雁翎刀" in af.text
+    pick = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_ma1",
+                AgentTrace.role == "orchestrator",
+                AgentTrace.agent_name == "(best-of-K pick)")
+        .first()
+    )
+    assert (pick.extra or {}).get("n_authors") == 2
+    assert (pick.extra or {}).get("winner_author_idx") == 1
+    cand_traces = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_ma1", AgentTrace.role == "author")
+        .order_by(AgentTrace.seq).all()
+    )
+    candidate_authors = [t.agent_name for t in cand_traces if (t.extra or {}).get("is_best_of_candidate")]
+    assert candidate_authors == ["dialogue_first", "vivid_desc"]
+
+
+def test_multi_author_uses_per_author_temperature(db, world_factory):
+    """每个 author 应使用自己的 temperature（写入 trace.extra.temperature）。"""
+    w, _ = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()],
+        authors=[
+            AuthorAgent(name="cool", temperature=0.5),
+            AuthorAgent(name="hot", temperature=1.2),
+        ],
+        critics=[CriticAgent(name="strict")],
+    )
+    p = _best_of_k_provider(
+        candidate_texts=["冷温稿子。", "高温稿子。"],
+        critic_responses_per_candidate=[
+            ['{"verdict":"pass","score":7,"reason":"ok","suggestions":""}'],
+            ['{"verdict":"pass","score":7,"reason":"ok","suggestions":""}'],
+        ],
+    )
+    run_orchestrated_step(db, w, "测试", job_id="j_ma2", cfg=cfg, provider=p)
+    cand_traces = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_ma2",
+                AgentTrace.role == "author",
+                AgentTrace.agent_name.in_(["cool", "hot"]))
+        .order_by(AgentTrace.seq).all()
+    )
+    temps = [(t.agent_name, (t.extra or {}).get("temperature")) for t in cand_traces]
+    assert temps == [("cool", 0.5), ("hot", 1.2)]
+
+
+def test_multi_author_no_critics_falls_back_to_single(db, world_factory):
+    """N=2 但无 critic：无评分机制，走单次 author 路径（cfg.authors[0]）。"""
+    w, _ = world_factory()
+    _bind_style(db, w)
+    db.commit()
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()],
+        authors=[AuthorAgent(name="a"), AuthorAgent(name="b")],
+        critics=[],
+    )
+    p = _director_then_critics_provider([], author_rewrites=None)
+    res = run_orchestrated_step(db, w, "测试", job_id="j_ma3", cfg=cfg, provider=p)
+    assert res["ok"]
+    cand_traces = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_ma3", AgentTrace.role == "author")
+        .all()
+    )
+    assert all(not (t.extra or {}).get("is_best_of_candidate") for t in cand_traces)
+
+
+def test_multi_author_combined_with_best_of_k_cartesian(db, world_factory):
+    """N=2 + K=2 → 4 个候选 (cartesian)，每对 (author, k_idx) 一个候选。"""
+    w, _ = world_factory()
+    _bind_style(db, w)
+    db.commit()
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()],
+        authors=[AuthorAgent(name="a"), AuthorAgent(name="b")],
+        critics=[CriticAgent(name="strict")],
+        author_best_of=2,
+        max_critic_retries=0,
+    )
+    p = _best_of_k_provider(
+        candidate_texts=["a-low", "a-high", "b-low", "b-high"],
+        critic_responses_per_candidate=[
+            ['{"verdict":"pass","score":6,"reason":"ok","suggestions":""}'],
+            ['{"verdict":"pass","score":7,"reason":"ok","suggestions":""}'],
+            ['{"verdict":"pass","score":8,"reason":"ok","suggestions":""}'],
+            ['{"verdict":"pass","score":9,"reason":"ok","suggestions":""}'],
+        ],
+    )
+    res = run_orchestrated_step(db, w, "测试", job_id="j_ma4", cfg=cfg, provider=p)
+    assert res["final_verdict"] == "pass"
+    cand_traces = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_ma4", AgentTrace.role == "author")
+        .order_by(AgentTrace.seq).all()
+    )
+    real_candidates = [t for t in cand_traces if (t.extra or {}).get("is_best_of_candidate")]
+    assert len(real_candidates) == 4
+    # b-high (score=9) 应胜出
+    pick = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_ma4",
+                AgentTrace.role == "orchestrator",
+                AgentTrace.agent_name == "(best-of-K pick)")
+        .first()
+    )
+    assert (pick.extra or {}).get("winner_author_idx") == 1
+    assert (pick.extra or {}).get("k") == 2
+    assert (pick.extra or {}).get("n_authors") == 2

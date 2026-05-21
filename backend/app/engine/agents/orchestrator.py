@@ -375,6 +375,37 @@ def _best_of_k_temperatures(k: int, base: float = 0.85) -> list[float]:
     return [round(lo + spread * i / (k - 1), 2) for i in range(k)]
 
 
+def _build_candidate_specs(cfg: PipelineConfig) -> list[dict]:
+    """生成"要跑哪几个候选"的清单。
+
+    - N=1, K=1：单候选 → 调用方走单次 author 路径，不进 ranking
+    - N=1, K>1：1 个 author × K 个温度
+    - N>1, K=1：N 个 author × 各自温度（system_prompt_extra 不同 → 真分工）
+    - N>1, K>1：N 个 author × K 个温度（cartesian），每个 spec 标 author/temp 来源
+    """
+    N = len(cfg.authors)
+    K = cfg.author_best_of
+    if N == 1 and K == 1:
+        return []
+    specs: list[dict] = []
+    if N == 1:
+        for k_idx, t in enumerate(_best_of_k_temperatures(K)):
+            specs.append({"author_idx": 0, "k_idx": k_idx, "temperature": t,
+                          "author_cfg": cfg.authors[0]})
+    elif K == 1:
+        for a_idx, a in enumerate(cfg.authors):
+            specs.append({"author_idx": a_idx, "k_idx": 0, "temperature": a.temperature,
+                          "author_cfg": a})
+    else:
+        # N>1 且 K>1：cartesian，但每个 author 的温度只取自身值（K 决定每个 author 跑几次相同温度的多样性意义不大）
+        # 简化：把 K 当成"每个 author 跑多少次", 仍用 _best_of_k_temperatures(K) 作温度变化
+        for a_idx, a in enumerate(cfg.authors):
+            for k_idx, t in enumerate(_best_of_k_temperatures(K)):
+                specs.append({"author_idx": a_idx, "k_idx": k_idx, "temperature": t,
+                              "author_cfg": a})
+    return specs
+
+
 def _best_of_k_author_phase(
     db: Session,
     job_id: str,
@@ -389,18 +420,20 @@ def _best_of_k_author_phase(
     cancel_check: Optional[Callable[[], bool]],
     arc_context: Optional[str],
 ) -> Optional[dict]:
-    """生成 K 个候选 + 用 critic 总分挑出 winner，写为 author_final。
+    """生成 N×K 个候选 + 用 critic 总分挑出 winner，写为 author_final。
 
-    返回 None 表示无法做 best-of-K（无 drafts / 无 style / 无 provider / K<=1），
+    触发条件：(K>1 OR N>1) AND 至少 1 个 critic AND 有 draft+style。
+    返回 None 表示无法做 ranking（candidates 列表为空 / 无 provider / 无 critic / 无 draft 等），
     调用方应该 fallthrough 到单次 author 路径。
 
     成功返回 dict：
       seq_after, final_text, author_log_id,
-      winner_idx, winner_critic_results: dict[name → parsed],
+      winner_idx (绝对 idx, 0..N*K-1), winner_author_idx, winner_temperature,
+      winner_critic_results: dict[name → parsed],
       winner_all_pass: bool, winner_failed_feedback: list[dict],
-      candidate_summaries: 用于汇总 trace
     """
-    if cfg.author_best_of <= 1 or not cfg.critics:
+    specs = _build_candidate_specs(cfg)
+    if not specs or not cfg.critics:
         return None
     from .author import (
         prepare_author_inputs, call_author_llm_once,
@@ -416,11 +449,9 @@ def _best_of_k_author_phase(
         return None  # no draft / no style → 走单次路径
 
     seq = seq_in
-    K = cfg.author_best_of
-    temps = _best_of_k_temperatures(K)
-    candidates: list[dict] = []  # {idx, temperature, text|None, reason}
+    candidates: list[dict] = []  # {idx, author_idx, temperature, author_cfg, text|None, reason}
 
-    for i, temp in enumerate(temps):
+    for i, spec in enumerate(specs):
         if cancel_check and cancel_check():
             from ..core.simulator import CancelledError
             raise CancelledError()
@@ -428,20 +459,30 @@ def _best_of_k_author_phase(
             budget.check()
             budget.add_call()
         except BudgetExhausted:
-            log.info("budget exhausted at best-of-K candidate %d", i)
+            log.info("budget exhausted at candidate %d/%d", i, len(specs))
             break
-        text, reason = call_author_llm_once(llm, prep, temperature=temp)
-        candidates.append({"idx": i, "temperature": temp, "text": text, "reason": reason})
+        a_cfg = spec["author_cfg"]
+        text, reason = call_author_llm_once(
+            llm, prep,
+            temperature=spec["temperature"],
+            system_prompt_extra=a_cfg.system_prompt_extra,
+        )
+        candidates.append({
+            "idx": i, "author_idx": spec["author_idx"],
+            "temperature": spec["temperature"],
+            "author_cfg": a_cfg, "text": text, "reason": reason,
+        })
         seq += 1
         _write_trace(
             db, job_id=job_id, world_id=world.id, seq=seq,
-            role="author", agent_name=primary_author.name,
-            model=primary_author.model,
+            role="author", agent_name=a_cfg.name,
+            model=a_cfg.model,
             status="done" if text else "error",
-            input_summary=f"best-of-{K} 候选 #{i} (T={temp})",
+            input_summary=f"候选 #{i} (author={a_cfg.name}, T={spec['temperature']})",
             output_summary=_summarize(text or f"(rejected: {reason})", 200),
             extra={
-                "candidate_index": i, "temperature": temp,
+                "candidate_index": i, "author_idx": spec["author_idx"],
+                "temperature": spec["temperature"],
                 "is_best_of_candidate": True, "char_count": len(text or ""),
                 "reject_reason": None if text else reason,
             },
@@ -523,15 +564,19 @@ def _best_of_k_author_phase(
 
     final = write_author_final(db, prep, winner_text)
 
+    winner_cand = next((c for c in valid if c["idx"] == winner_idx), None)
     seq += 1
     _write_trace(
         db, job_id=job_id, world_id=world.id, seq=seq,
         role="orchestrator", agent_name="(best-of-K pick)",
         status="done", verdict="pass" if winner_all_pass else "fail",
-        input_summary=f"K={K} 候选 / {len(valid)} 有效",
-        output_summary=f"选中 #{winner_idx} (score={winner_summary.get('total_score') if winner_summary else 'n/a'}, all_pass={winner_all_pass})",
+        input_summary=f"N={len(cfg.authors)} K={cfg.author_best_of} 候选 / {len(valid)} 有效",
+        output_summary=f"选中 #{winner_idx} (author={winner_cand['author_cfg'].name if winner_cand else 'n/a'}, score={winner_summary.get('total_score') if winner_summary else 'n/a'}, all_pass={winner_all_pass})",
         extra={
-            "k": K, "winner_idx": winner_idx,
+            "k": cfg.author_best_of,
+            "n_authors": len(cfg.authors),
+            "winner_idx": winner_idx,
+            "winner_author_idx": winner_cand["author_idx"] if winner_cand else -1,
             "winner_all_pass": winner_all_pass,
             "summary": [
                 {"idx": r["idx"], "total_score": r.get("total_score"),
@@ -546,6 +591,7 @@ def _best_of_k_author_phase(
         "final_text": winner_text,
         "author_log_id": final.log_id,
         "winner_idx": winner_idx,
+        "winner_author_idx": winner_cand["author_idx"] if winner_cand else -1,
         "winner_critic_results": winner_results,
         "winner_all_pass": winner_all_pass,
         "winner_failed_feedback": winner_feedback,
@@ -683,8 +729,8 @@ def run_orchestrated_step(
             log.warning("build_chapter_recap_block failed: %s", e)
             arc_context = ""
 
-    # 优先 best-of-K（K>1 + 有 critic）
-    if cfg.author_best_of > 1 and cfg.critics:
+    # 优先 ranking 路径：K>1（best-of-K）或 N>1（多 author 投票），且至少 1 个 critic
+    if (cfg.author_best_of > 1 or len(cfg.authors) > 1) and cfg.critics:
         from ..core.simulator import CancelledError
         try:
             best_of_state = _best_of_k_author_phase(

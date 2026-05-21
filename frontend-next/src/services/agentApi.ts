@@ -18,6 +18,7 @@ export interface AuthorAgent {
   name: string;
   model: string;
   temperature: number;
+  system_prompt_extra?: string;
 }
 
 export interface CriticAgent {
@@ -160,7 +161,7 @@ export function emptyDirector(): DirectorAgent {
   return { name: 'director', model: '', temperature: 0.7, max_hops: 8 };
 }
 export function emptyAuthor(): AuthorAgent {
-  return { name: 'author', model: '', temperature: 0.7 };
+  return { name: 'author', model: '', temperature: 0.85, system_prompt_extra: '' };
 }
 export function emptyCritic(): CriticAgent {
   return { name: '审稿人', model: '', temperature: 0.3, focus: '', severity: 'normal', kind: 'general' };

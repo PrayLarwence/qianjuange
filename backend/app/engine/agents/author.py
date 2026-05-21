@@ -292,14 +292,21 @@ def call_author_llm_once(
     prep: _AuthorPrep,
     *,
     temperature: float = 0.85,
+    system_prompt_extra: str = "",
 ) -> tuple[Optional[str], str]:
     """单次 LLM 调用 + 长度健康度校验。
 
     成功返回 (text, "ok")；任何失败返回 (None, reason)。无 DB 写入。
+
+    system_prompt_extra: 在共享 system prompt 末尾追加的额外指令（多 author 投票时
+    每个 author 用自己的 extra 制造分工/风格差异）。
     """
+    system = prep.system_prompt
+    if system_prompt_extra and system_prompt_extra.strip():
+        system = system + "\n\n# 本 author 的额外指令\n" + system_prompt_extra.strip()
     try:
         resp = llm.chat(
-            system=prep.system_prompt,
+            system=system,
             messages=[Message(role="user", content=prep.user_prompt)],
             tools=[],
             max_tokens=4096,

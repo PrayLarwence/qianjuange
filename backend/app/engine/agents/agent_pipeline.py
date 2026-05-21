@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 MAX_DIRECTORS = 3
-MAX_AUTHORS = 1
+MAX_AUTHORS = 3
 MAX_CRITICS = 5
 MAX_RETRIES_HARD_CAP = 5  # 用户在 UI 改 max_critic_retries 时不能超过这个
 MAX_AUTHOR_BEST_OF = 4  # best-of-K 的 K 上限
@@ -46,6 +46,7 @@ class AuthorAgent(BaseModel):
     name: str = Field(default="author", min_length=1, max_length=64)
     model: str = ""
     system_prompt_extra: str = ""
+    temperature: float = Field(default=0.85, ge=0.0, le=2.0)
 
 
 class CriticAgent(BaseModel):
@@ -84,8 +85,10 @@ class PipelineConfig(BaseModel):
     @field_validator("authors")
     @classmethod
     def _check_authors(cls, v):
-        if len(v) != MAX_AUTHORS:
-            raise ValueError(f"author 必须是 {MAX_AUTHORS} 个")
+        if not v:
+            raise ValueError("至少需要 1 个 author")
+        if len(v) > MAX_AUTHORS:
+            raise ValueError(f"author 最多 {MAX_AUTHORS} 个")
         return v
 
     @field_validator("critics")

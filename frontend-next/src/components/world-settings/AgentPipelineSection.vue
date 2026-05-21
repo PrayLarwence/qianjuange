@@ -3,7 +3,7 @@ import { onMounted, ref, watch } from 'vue';
 import {
   agentPipelineApi,
   type PipelineConfig, type PipelineLimits,
-  type CriticAgent, emptyCritic, emptyArcCritic,
+  type CriticAgent, emptyCritic, emptyArcCritic, emptyAuthor,
 } from '@/services/agentApi';
 import type { WorldDetail } from '@/services/api';
 import { useToastStore } from '@/stores/toast';
@@ -67,6 +67,23 @@ function addArcCritic() {
 function removeCritic(i: number) {
   if (!cfg.value) return;
   cfg.value.critics.splice(i, 1);
+  markDirty();
+}
+
+function addAuthor() {
+  if (!cfg.value || !limits.value) return;
+  const max = (limits.value as any).max_authors ?? 3;
+  if (cfg.value.authors.length >= max) {
+    toast.error(`最多 ${max} 个 author`);
+    return;
+  }
+  cfg.value.authors.push(emptyAuthor());
+  markDirty();
+}
+
+function removeAuthor(i: number) {
+  if (!cfg.value || cfg.value.authors.length <= 1) return;
+  cfg.value.authors.splice(i, 1);
   markDirty();
 }
 
@@ -157,17 +174,40 @@ const severityOptions: { value: CriticAgent['severity']; label: string; hint: st
         </p>
       </div>
 
-      <!-- Author（固定 1 个） -->
-      <div class="border-t border-border pt-4">
-        <p class="text-xs text-muted mb-2">Author（把粗稿改写为定稿）</p>
-        <div class="grid grid-cols-3 gap-2">
-          <label class="text-xs text-muted col-span-3">名称</label>
-          <input v-model="cfg.authors[0].name" @input="markDirty" class="input col-span-3" />
-          <label class="text-xs text-muted col-span-2">模型</label>
-          <label class="text-xs text-muted">温度</label>
-          <input v-model="cfg.authors[0].model" @input="markDirty" placeholder="留空=用全局 LLM 设置" class="input col-span-2" />
-          <input type="number" step="0.1" min="0" max="2"
-                 v-model.number="cfg.authors[0].temperature" @input="markDirty" class="input" />
+      <!-- Authors（1..N，N>1 + 有 critic 时启用"投票" 模式：每个 author 各出一稿，按总分挑赢家） -->
+      <div class="border-t border-border pt-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <p class="text-xs text-muted">
+            Authors（把粗稿改写为定稿）
+            <span v-if="cfg.authors.length > 1 && cfg.critics.length > 0"
+                  class="ml-2 text-emerald-600">投票模式</span>
+            <span v-else-if="cfg.authors.length > 1"
+                  class="ml-2 text-amber-600">⚠ 多 author 需至少 1 个 critic 才会真投票</span>
+          </p>
+          <button class="btn btn-ghost text-xs" @click="addAuthor"
+                  :disabled="cfg.authors.length >= ((limits as any)?.max_authors ?? 3)">+ 添加 author</button>
+        </div>
+        <div v-for="(a, i) in cfg.authors" :key="i" class="border border-border rounded p-2 space-y-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-muted">#{{ i + 1 }}</span>
+            <input v-model="a.name" @input="markDirty" placeholder="名称" class="input flex-1 text-sm" />
+            <button class="btn btn-ghost text-xs text-red-500"
+                    :disabled="cfg.authors.length <= 1"
+                    @click="removeAuthor(i)">移除</button>
+          </div>
+          <div class="grid grid-cols-3 gap-2 text-sm">
+            <label class="text-xs text-muted col-span-2">模型</label>
+            <label class="text-xs text-muted">温度</label>
+            <input v-model="a.model" @input="markDirty"
+                   placeholder="留空=用全局 LLM 设置" class="input col-span-2" />
+            <input type="number" step="0.1" min="0" max="2"
+                   v-model.number="a.temperature" @input="markDirty" class="input" />
+          </div>
+          <div>
+            <label class="text-xs text-muted">额外 system prompt（可选；多 author 时用来做风格分工）</label>
+            <textarea v-model="a.system_prompt_extra" @input="markDirty" rows="2"
+                      placeholder="例如：'多写感官描写'，'多写对白'" class="input w-full text-sm"></textarea>
+          </div>
         </div>
       </div>
 
