@@ -336,9 +336,6 @@ onMounted(() => loadLLM());
               </div>
               <div v-else class="text-xs text-muted">暂无调用记录</div>
             </div>
-            <div class="pt-3 border-t border-border">
-              <a href="/legacy/" class="btn btn-ghost text-xs">↗ 打开旧版（完整数据管理）</a>
-            </div>
           </section>
         </div>
       </aside>

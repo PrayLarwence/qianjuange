@@ -12,7 +12,6 @@ const router = useRouter();
     </p>
     <div class="flex gap-2">
       <button class="btn btn-accent" @click="router.push('/worlds')">进入世界库</button>
-      <a class="btn btn-ghost" href="/legacy/">↗ 旧版</a>
     </div>
   </section>
 </template>

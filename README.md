@@ -146,7 +146,6 @@ frontend-next/  Vue 3 + Vite + TS (主前端)
   views/world/  各视图
   components/world-settings/  WorldSettingsView 8 个子 section
 
-frontend/       Alpine.js 老前端 (已冻结)
 build/          PyInstaller spec + Inno Setup .iss + 一键 .bat
 data/           开发模式数据目录 (world.db / llm_config.json / maps / jobs)
 ```
@@ -317,7 +316,6 @@ flowchart TB
 
 ## 注意事项
 
-- **`frontend/` 已冻结**（2026-01）。新功能只进 `frontend-next/`。详见 `frontend/FROZEN.md`
 - 添加新后端端点：在 `app/api/` 下找最贴近的 `*_api.py` 加进去，或新建 `xxx_api.py` 后在 `routes.py` 加两行 `import` + `include_router`
 - 添加新世界设置 section：在 `frontend-next/src/components/world-settings/` 新建 `XxxSection.vue`，在 `WorldSettingsView.vue` 编排即可
 - DeepSeek 走 OpenAI 兼容协议，原生 tool calling

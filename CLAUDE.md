@@ -7,9 +7,9 @@
 千卷阁（Qianjuange）：面向小说创作的世界模拟沙盒。用户用 AI 工具调用做世界推演、抽事件、改写章节；也支持反向导入现有小说做"骨架抽取 → 事件审阅 → 继续推演"。代码内部标识符用拼音 `qianjuange`，UI 用中文。
 
 ## 一句话技术栈
-- 后端：Python 3.11 + FastAPI + SQLAlchemy + SQLite，单文件 `data/world.db`
-- 前端：**只动 `frontend-next/`**（Vue 3 + TS + Vite + Pinia + Tailwind）。`frontend/` 是 Alpine.js 老前端，已冻结，不要碰
-- LLM：OpenAI / Claude / DeepSeek / Ollama，配置写在 `data/llm_config.json`，UI 里改
+- 后端：Python 3.14 + FastAPI + SQLAlchemy + SQLite，单文件 `data/world.db`
+- 前端：`frontend-next/` (Vue 3 + TS + Vite + Pinia + Tailwind)。旧 Alpine.js 前端 2026-05 已删除
+- LLM：14 家 provider（Claude / OpenAI / DeepSeek / Gemini / Grok / 通义 / 智谱 / 月之暗面 / 豆包 / 硅基流动 / OpenRouter / 302.ai / Ollama / LM Studio），配置写在 `data/llm_config.json`，UI 里改
 
 ---
 
@@ -25,7 +25,7 @@ cd frontend-next && npm run dev
 # 一键（Windows）
 run.bat
 
-# 测试（427 项 pytest，FakeProvider 替身，不打真 LLM）
+# 测试（508 项 pytest，FakeProvider 替身，不打真 LLM）
 run-tests.bat
 # 或手动
 cd backend && ../.venv/Scripts/python -m pytest
@@ -144,7 +144,6 @@ WorldSettingsView 在 2025 年拆成了 8 个 section（每个 50–420 行）�
 ## 开发约定 / 不要做的事
 
 ### 不要碰
-- `frontend/`（Alpine.js 老前端，2025 已冻结，见 `frontend/FROZEN.md`）
 - 直接打真 LLM 跑测试 → 用 FakeProvider，看 `tests/conftest.py`
 - 在 `data/` 下手改 `world.db` → 用 SQLAlchemy 迁移或 API 端点
 - 在 `routes.py` 写新端点 → 见上文路由分布

@@ -23,7 +23,6 @@ build/build/
 build/dist/
 build/installer/
 frontend-next/dist/
-frontend/dist/
 
 # pytest / coverage
 .pytest_cache/

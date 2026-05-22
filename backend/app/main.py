@@ -20,21 +20,20 @@ from .api.storyboard_aux_routes import router as storyboard_aux_router
 from .providers import load_config
 
 
-def _resolve_static_roots() -> tuple[Path | None, Path | None]:
-    """开发模式: 仓库 ./frontend & ./frontend-next/dist; 打包模式: PyInstaller _MEIPASS/static."""
+def _resolve_static_root() -> Path | None:
+    """开发模式: 仓库 ./frontend-next/dist; 打包模式: PyInstaller _MEIPASS/static."""
     if getattr(sys, "frozen", False):
         meipass = Path(getattr(sys, "_MEIPASS", "."))
         dist = meipass / "static"
-        return None, dist if dist.exists() else None
+        return dist if dist.exists() else None
     root = Path(__file__).resolve().parents[2]
-    legacy = root / "frontend"
     dist = root / "frontend-next" / "dist"
-    return (legacy if legacy.exists() else None), (dist if dist.exists() else None)
+    return dist if dist.exists() else None
 
 
-FRONTEND_DIR, DIST_DIR = _resolve_static_roots()
+DIST_DIR = _resolve_static_root()
 
-app = FastAPI(title="千卷阁", version="0.1.0")
+app = FastAPI(title="千卷阁", version="0.1.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -75,13 +74,7 @@ def health():
     return {"ok": True, "provider": cfg.get("active", "claude")}
 
 
-if FRONTEND_DIR is not None:
-    # 旧前端：挂到 /legacy，并保留 /static 以兼容旧 index.html 内部的绝对路径引用
-    app.mount("/legacy", StaticFiles(directory=FRONTEND_DIR, html=True), name="legacy")
-    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
-
 if DIST_DIR is not None:
-    # 新前端：Vite 构建产物挂到 /assets，其余路径走 SPA fallback
     app.mount("/assets", StaticFiles(directory=DIST_DIR / "assets"), name="assets")
 
     @app.get("/favicon.ico")
@@ -97,14 +90,8 @@ if DIST_DIR is not None:
         if full_path == "api" or full_path.startswith("api/"):
             raise HTTPException(status_code=404)
         return FileResponse(DIST_DIR / "index.html")
-elif FRONTEND_DIR is not None:
-    # 没构建新版时，根路径回退到旧版
-    @app.get("/")
-    def index():
-        return FileResponse(FRONTEND_DIR / "index.html")
 
 
 @app.get("/favicon.ico")
 def favicon():
-    # 仅当上面两个 favicon_dist / index 都没注册时兜底 (理论上不会到这里)
     return Response(status_code=204)
