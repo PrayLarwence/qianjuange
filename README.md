@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2B-lightgrey.svg)](#安装)
-[![Python](https://img.shields.io/badge/python-3.13-blue.svg)](#从源码运行)
+[![Python](https://img.shields.io/badge/python-3.14-blue.svg)](#从源码运行)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883.svg)](#从源码运行)
 
 > 项目代号 `qianjuange`（千卷阁）。代码内部标识符 / 文件路径用拼音，UI 显示用中文。
@@ -66,7 +66,7 @@
 
 ### 依赖
 
-- Python 3.13
+- Python 3.14（3.11+ 也能跑，3.14 是当前开发环境）
 - Node.js 18+
 - Windows / 其他 OS（开发模式不限平台，桌面打包目前只做了 Windows）
 
