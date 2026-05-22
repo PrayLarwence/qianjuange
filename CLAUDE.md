@@ -4,7 +4,7 @@
 > 给人看的 README 在 `README.md`，词汇表在 `docs/GLOSSARY.md`，数据流图也在 README 里。
 
 ## 这是什么项目
-Narrative Sandbox：面向小说创作的世界模拟沙盒。用户用 AI 工具调用做世界推演、抽事件、改写章节；也支持反向导入现有小说做"骨架抽取 → 事件审阅 → 继续推演"。
+千卷阁（Qianjuange）：面向小说创作的世界模拟沙盒。用户用 AI 工具调用做世界推演、抽事件、改写章节；也支持反向导入现有小说做"骨架抽取 → 事件审阅 → 继续推演"。代码内部标识符用拼音 `qianjuange`，UI 用中文。
 
 ## 一句话技术栈
 - 后端：Python 3.11 + FastAPI + SQLAlchemy + SQLite，单文件 `data/world.db`

@@ -1,18 +1,15 @@
 from __future__ import annotations
 import json
 import os
-from pathlib import Path
 from typing import Any
 from threading import RLock
 
 from . import registry
+from .secret import decrypt as _decrypt, encrypt as _encrypt
+from ..paths import LLM_CONFIG_PATH as CONFIG_PATH, DATA_DIR  # noqa: F401  re-export 给老调用方
 
 # 触发 provider 模块导入 → __init_subclass__ 注册
 registry.import_all_providers()
-
-DATA_DIR = Path(__file__).resolve().parents[3] / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-CONFIG_PATH = DATA_DIR / "llm_config.json"
 
 _lock = RLock()
 
@@ -58,6 +55,11 @@ def load_config() -> dict[str, Any]:
             cfg["providers"].setdefault(k, dict(v))
             for fld, default in v.items():
                 cfg["providers"][k].setdefault(fld, default)
+        # 透明解密 api_key (旧 plain 文件原样穿透; 已迁移密文解出明文)
+        for p in cfg["providers"].values():
+            raw = p.get("api_key", "") or ""
+            if raw:
+                p["api_key"] = _decrypt(raw)
         return _merge_env(cfg)
 
 
@@ -79,7 +81,13 @@ def save_config(updates: dict[str, Any]) -> dict[str, Any]:
                     if value is None:
                         continue
                     target[key] = value
-        CONFIG_PATH.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 写盘前把所有非空 api_key 加密 (深拷贝, 避免污染内存里的明文)
+        on_disk = json.loads(json.dumps(existing))
+        for p in on_disk["providers"].values():
+            plain = p.get("api_key", "") or ""
+            if plain:
+                p["api_key"] = _encrypt(plain)
+        CONFIG_PATH.write_text(json.dumps(on_disk, ensure_ascii=False, indent=2), encoding="utf-8")
         return existing
 
 

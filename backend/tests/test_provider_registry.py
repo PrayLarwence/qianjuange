@@ -13,13 +13,21 @@ import pytest
 
 def test_all_four_providers_registered():
     from app.providers import PROVIDER_CLASSES
-    assert set(PROVIDER_CLASSES.keys()) == {"claude", "openai", "deepseek", "ollama", "openrouter"}
+    assert set(PROVIDER_CLASSES.keys()) == {
+        "claude", "openai", "deepseek", "ollama", "openrouter",
+        "zhipu", "qwen", "moonshot", "doubao", "siliconflow",
+        "grok", "lmstudio", "ai302", "gemini",
+    }
 
 
 def test_provider_meta_complete():
     from app.providers import registry
     meta = registry.provider_meta()
-    for name in ("claude", "openai", "deepseek", "ollama", "openrouter"):
+    for name in (
+        "claude", "openai", "deepseek", "ollama", "openrouter",
+        "zhipu", "qwen", "moonshot", "doubao", "siliconflow",
+        "grok", "lmstudio", "ai302", "gemini",
+    ):
         m = meta[name]
         assert m["label"], f"{name} missing label"
         assert isinstance(m["default_models"], list) and m["default_models"], f"{name} missing default_models"
@@ -208,7 +216,7 @@ def test_openrouter_injects_referer_and_title_headers():
     h = p._build_headers()
     assert h["Authorization"] == "Bearer sk-or-test"
     assert h["HTTP-Referer"].startswith("http")
-    assert h["X-Title"] == "Narrative Sandbox"
+    assert h["X-Title"] == "Qianjuange"
 
 
 def test_openrouter_uses_compat_chat_implementation():
@@ -258,7 +266,7 @@ def test_openrouter_list_models_parses_data_field(monkeypatch):
     assert captured["url"] == "https://openrouter.ai/api/v1/models"
     # referer/title 必须传给 GET /models, 不只是 chat
     assert captured["headers"]["HTTP-Referer"]
-    assert captured["headers"]["X-Title"] == "Narrative Sandbox"
+    assert captured["headers"]["X-Title"] == "Qianjuange"
 
 
 def test_list_models_unsupported_provider_raises():

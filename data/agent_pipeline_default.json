@@ -1,7 +1,7 @@
 {
   "directors": [
     {
-      "name": "director",
+      "name": "custom",
       "model": "",
       "system_prompt_extra": "",
       "max_hops": 8
@@ -9,14 +9,24 @@
   ],
   "authors": [
     {
-      "name": "author",
+      "name": "my-author",
       "model": "",
-      "system_prompt_extra": ""
+      "system_prompt_extra": "",
+      "temperature": 0.85
     }
   ],
-  "critics": [],
-  "max_critic_retries": 3,
+  "critics": [
+    {
+      "name": "strict-critic",
+      "model": "",
+      "focus": "",
+      "severity": "strict",
+      "kind": "general"
+    }
+  ],
+  "max_critic_retries": 4,
   "critic_mode": "parallel",
+  "author_best_of": 1,
   "budget": {
     "max_llm_calls": 20,
     "max_wall_seconds": 300

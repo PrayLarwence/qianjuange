@@ -60,7 +60,8 @@ def test_llm_config(payload: LLMTestRequest):
     try:
         provider = get_provider(payload.provider)
         cfg = load_config()["providers"].get(payload.provider, {})
-        if payload.provider != "ollama" and not cfg.get("api_key"):
+        cls = PROVIDER_CLASSES[payload.provider]
+        if getattr(cls, "needs_api_key", True) and not cfg.get("api_key"):
             return {"ok": False, "error": "未配置 API Key（请先粘贴 Key 再点测试）", "elapsed": 0}
         resp = provider.chat(
             system="You are a connectivity test endpoint. Reply with exactly: OK",

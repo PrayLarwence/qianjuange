@@ -54,7 +54,7 @@ set RELOAD_FLAG=
 if "%RELOAD%"=="1" set RELOAD_FLAG=--reload
 
 echo.
-echo [run] Starting Narrative Sandbox at http://localhost:8000
+echo [run] Starting 千卷阁 at http://localhost:8000
 echo [run] Press CTRL+C to stop.  (set RELOAD=0 to start without --reload)
 echo.
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --app-dir backend %RELOAD_FLAG%

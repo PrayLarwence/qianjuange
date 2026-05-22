@@ -16,11 +16,12 @@ config 形状（Pydantic model 自动校验）：
 """
 from __future__ import annotations
 import json
-from pathlib import Path
 from threading import RLock
 from typing import Optional, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+from ...paths import DATA_DIR, AGENT_PIPELINE_DEFAULT_PATH as DEFAULT_PATH
 
 
 MAX_DIRECTORS = 3
@@ -28,9 +29,6 @@ MAX_AUTHORS = 3
 MAX_CRITICS = 5
 MAX_RETRIES_HARD_CAP = 5  # 用户在 UI 改 max_critic_retries 时不能超过这个
 MAX_AUTHOR_BEST_OF = 4  # best-of-K 的 K 上限
-
-DATA_DIR = Path(__file__).resolve().parents[3] / "data"
-DEFAULT_PATH = DATA_DIR / "agent_pipeline_default.json"
 
 _lock = RLock()
 

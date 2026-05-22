@@ -56,4 +56,8 @@ def import_all_providers() -> None:
 
     config.py / __init__.py 调用前先 import 这个，确保全员就位。
     """
-    from . import claude, openai_compat, openai_provider, deepseek, ollama, openrouter  # noqa: F401
+    from . import (  # noqa: F401
+        claude, openai_compat, openai_provider, deepseek, ollama, openrouter,
+        zhipu, qwen, moonshot, doubao, siliconflow,
+        grok, lmstudio, ai302, gemini,
+    )

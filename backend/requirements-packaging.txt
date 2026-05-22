@@ -1,0 +1,6 @@
+# 打包成 Windows 原生应用时额外需要的开发依赖.
+# 仅在打包/分发场景安装, 业务运行时不依赖.
+-r requirements.txt
+
+pywebview>=5.0,<6.0
+pyinstaller>=6.0,<7.0

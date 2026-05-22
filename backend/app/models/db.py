@@ -2,9 +2,9 @@ from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATA_DIR = Path(__file__).resolve().parents[3] / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-DB_PATH = DATA_DIR / "world.db"
+from ..paths import DATA_DIR, DB_PATH, ensure_layout
+
+ensure_layout()
 
 engine = create_engine(
     f"sqlite:///{DB_PATH}",

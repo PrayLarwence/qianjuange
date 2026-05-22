@@ -35,7 +35,19 @@ const fetchModelsError = ref('');
 const showModelSuggestions = ref(false);
 
 const supportsListing = computed(() => !!llmMeta.value[editingProvider.value]?.supports_listing);
+const needsApiKey = computed(() => llmMeta.value[editingProvider.value]?.needs_api_key !== false);
 const suggestedModels = computed(() => llmMeta.value[editingProvider.value]?.default_models || []);
+
+const MODEL_HINTS: Record<string, string> = {
+  doubao: '填模型短名 (doubao-seed-1-6-...) 或 endpoint_id (ep-xxx)',
+  qwen:   'DashScope OpenAI 兼容模式; 填模型名',
+  zhipu:  '智谱 GLM, 例如 glm-4-plus / glm-4.5',
+  lmstudio: 'LM Studio 当前已加载的模型名 (或 local-model)',
+  ollama: '本地 ollama 已 pull 的模型名 (llama3.1 / qwen2.5 等)',
+  gemini: 'Gemini 模型 ID, 例如 gemini-2.5-pro',
+  openrouter: '组合命名 vendor/model, 例如 anthropic/claude-opus-4',
+};
+const modelHint = computed(() => MODEL_HINTS[editingProvider.value] || '');
 
 const modelOptions = computed<ModelEntry[]>(() =>
   fetchedModels.value.length
@@ -246,10 +258,11 @@ onMounted(() => loadLLM());
                 <div v-else-if="fetchedModels.length" class="text-[11px] text-muted mt-1">
                   共 {{ fetchedModels.length }} 个模型可选 · 输入框支持搜索
                 </div>
+                <div v-else-if="modelHint" class="text-[11px] text-muted mt-1">{{ modelHint }}</div>
               </div>
 
-              <!-- API Key -->
-              <div>
+              <!-- API Key (lmstudio/ollama 等本地服务不需要) -->
+              <div v-if="needsApiKey">
                 <label class="text-muted text-xs uppercase tracking-wider mb-1 block">
                   API Key
                   <span v-if="llmConfig.providers?.[editingProvider]?.has_key" class="text-green-600">（已配置）</span>
@@ -259,8 +272,8 @@ onMounted(() => loadLLM());
                        placeholder="粘贴新 Key（留空不修改）" />
               </div>
 
-              <!-- Base URL (non-Ollama) -->
-              <div v-if="editingProvider !== 'ollama'">
+              <!-- Base URL (所有 provider 都允许覆盖, 本地服务尤其常用) -->
+              <div>
                 <label class="text-muted text-xs uppercase tracking-wider mb-1 block">Base URL</label>
                 <input v-model="editUrl" class="w-full h-9 px-2 rounded border border-border bg-transparent text-sm"
                        :placeholder="llmConfig.providers?.[editingProvider]?.base_url || ''" />

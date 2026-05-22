@@ -1,6 +1,8 @@
-# Narrative Sandbox
+# 千卷阁 · Qianjuange
 
 面向小说创作的世界模拟沙盒。结构化建模实体 / 事件 / 因果 / 时间线 / 分支，AI 工具调用推演 + 改写成章节。
+
+> 项目代号 `qianjuange`（千卷阁）。代码内部标识符 / 文件路径用拼音，UI 显示用中文。
 
 > **新 agent 进项目先读**：
 > - [`CLAUDE.md`](./CLAUDE.md) — 给 agent 自动加载的开发约定 + 当前重构状态

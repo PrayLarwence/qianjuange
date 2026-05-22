@@ -28,10 +28,7 @@ from typing import Optional
 
 import numpy as np
 
-from ...models.db import DATA_DIR
-
-
-MAP_DIR = DATA_DIR / "maps"
+from ...paths import MAPS_DIR as MAP_DIR
 MAP_DIR.mkdir(parents=True, exist_ok=True)
 
 

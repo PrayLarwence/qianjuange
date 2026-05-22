@@ -37,8 +37,8 @@ class OpenRouterProvider(OpenAICompatibleProvider):
     list_models_supported: ClassVar[bool] = True
 
     # 排行榜署名 (OpenRouter 推荐传, 不传也能用)
-    referer: ClassVar[str] = "https://github.com/burning-sun-prayers-for-rain/narrative-sandbox"
-    title: ClassVar[str] = "Narrative Sandbox"
+    referer: ClassVar[str] = "https://github.com/burning-sun-prayers-for-rain/qianjuange"
+    title: ClassVar[str] = "Qianjuange"
 
     def _build_headers(self) -> dict[str, str]:
         h = super()._build_headers()

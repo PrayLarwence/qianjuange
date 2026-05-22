@@ -11,8 +11,8 @@ const route = useRoute();
 <template>
   <header class="h-12 px-4 flex items-center gap-3 border-b border-border bg-bg/80 backdrop-blur sticky top-0 z-30">
     <RouterLink to="/" class="flex items-center gap-2 group">
-      <span class="w-6 h-6 rounded bg-accent flex items-center justify-center text-white text-xs font-bold">N</span>
-      <span class="text-sm font-medium tracking-wide">Narrative Sandbox</span>
+      <img src="/favicon.ico" alt="千卷阁" class="w-6 h-6 rounded" />
+      <span class="text-sm font-medium tracking-wide">千卷阁</span>
     </RouterLink>
 
     <nav class="flex items-center gap-1 ml-4 text-sm">

@@ -1,4 +1,5 @@
 .venv/
+.venv-build/
 __pycache__/
 *.pyc
 .env
@@ -8,8 +9,28 @@ data/*.db-wal
 data/*.db-journal
 data/llm_config.json
 data/maps/
+data/jobs/
+data/agent_pipeline_default.json
+data/desktop.log
 .idea/
 .vscode/
 .DS_Store
 node_modules/
 *.log
+
+# build artifacts (PyInstaller + Inno Setup + Vite)
+build/build/
+build/dist/
+build/installer/
+frontend-next/dist/
+frontend/dist/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS / editor
+Thumbs.db
+*.swp
+*~

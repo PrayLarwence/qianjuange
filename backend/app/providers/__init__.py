@@ -15,6 +15,15 @@ from .openai_provider import OpenAIProvider
 from .deepseek import DeepSeekProvider
 from .ollama import OllamaProvider
 from .openrouter import OpenRouterProvider
+from .zhipu import ZhipuProvider
+from .qwen import QwenProvider
+from .moonshot import MoonshotProvider
+from .doubao import DoubaoProvider
+from .siliconflow import SiliconFlowProvider
+from .grok import GrokProvider
+from .lmstudio import LMStudioProvider
+from .ai302 import AI302Provider
+from .gemini import GeminiProvider
 
 
 def get_provider(name: str | None = None, kind: str = "", world_id: str = "") -> LLMProvider:
@@ -77,6 +86,8 @@ def get_provider_for_role(world, role: str) -> LLMProvider:
 __all__ = [
     "LLMProvider", "LLMResponse", "Message", "ToolCall", "ToolSpec", "BaseProvider",
     "ClaudeProvider", "OpenAIProvider", "DeepSeekProvider", "OllamaProvider", "OpenRouterProvider",
+    "ZhipuProvider", "QwenProvider", "MoonshotProvider", "DoubaoProvider", "SiliconFlowProvider",
+    "GrokProvider", "LMStudioProvider", "AI302Provider", "GeminiProvider",
     "get_provider", "get_provider_for_role", "PROVIDER_CLASSES",
     "load_config", "save_config", "mask", "get_provider_config",
     "registry",
