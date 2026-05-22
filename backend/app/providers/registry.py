@@ -26,6 +26,7 @@ def provider_meta() -> dict[str, dict[str, Any]]:
             "label": cls.label or name,
             "needs_api_key": cls.needs_api_key,
             "supports_native_tools": cls.supports_native_tools,
+            "supports_listing": getattr(cls, "list_models_supported", False),
             "default_models": list(cls.default_models),
             "homepage": cls.homepage,
         }
@@ -55,4 +56,4 @@ def import_all_providers() -> None:
 
     config.py / __init__.py 调用前先 import 这个，确保全员就位。
     """
-    from . import claude, openai_compat, openai_provider, deepseek, ollama  # noqa: F401
+    from . import claude, openai_compat, openai_provider, deepseek, ollama, openrouter  # noqa: F401

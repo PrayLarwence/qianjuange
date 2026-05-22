@@ -113,3 +113,21 @@ class OpenAICompatibleProvider(BaseProvider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+
+    # ─── 可选: 动态拉模型列表 ─────────────────────────
+    # 默认走 OpenAI 标准 GET /models, 子类可 override 走自己的
+    list_models_path: str = "/models"
+    list_models_supported: bool = False  # 子类显式打开
+
+    def list_models(self, timeout: float = 30.0) -> list[dict[str, Any]]:
+        """返回 [{"id": "...", "name": "...", ...}], 字段不规范化, 由前端自己挑."""
+        if not self.list_models_supported:
+            raise NotImplementedError(f"{self.name} does not support listing models")
+        with httpx.Client(timeout=timeout) as client:
+            r = client.get(f"{self.base_url}{self.list_models_path}", headers=self._build_headers())
+            r.raise_for_status()
+            data = r.json()
+        # OpenAI / OpenRouter 都是 {"data": [...]}, 兜底直接返回根 list
+        if isinstance(data, dict) and "data" in data:
+            return data["data"]
+        return data if isinstance(data, list) else []

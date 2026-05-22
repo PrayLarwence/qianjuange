@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useThemeStore, type ThemeMode } from '@/stores/theme';
 import { useUiStore } from '@/stores/ui';
-import { llmApi, type LLMConfig, type ProviderMeta } from '@/services/api';
+import { llmApi, type LLMConfig, type ProviderMeta, type ModelEntry } from '@/services/api';
 
 const ui = useUiStore();
 const theme = useThemeStore();
@@ -27,6 +27,38 @@ const editingProvider = ref<string>('');
 const editModel = ref('');
 const editKey = ref('');
 const editUrl = ref('');
+
+// 动态模型列表 (OpenRouter 等支持)
+const fetchedModels = ref<ModelEntry[]>([]);
+const fetchingModels = ref(false);
+const fetchModelsError = ref('');
+const showModelSuggestions = ref(false);
+
+const supportsListing = computed(() => !!llmMeta.value[editingProvider.value]?.supports_listing);
+const suggestedModels = computed(() => llmMeta.value[editingProvider.value]?.default_models || []);
+
+const modelOptions = computed<ModelEntry[]>(() =>
+  fetchedModels.value.length
+    ? fetchedModels.value
+    : suggestedModels.value.map(s => ({ id: s, name: s })),
+);
+
+const filteredModels = computed(() => {
+  const q = editModel.value.trim().toLowerCase();
+  if (!q) return modelOptions.value.slice(0, 50);
+  return modelOptions.value
+    .filter(m => m.id.toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q))
+    .slice(0, 50);
+});
+
+function pickModel(id: string) {
+  editModel.value = id;
+  showModelSuggestions.value = false;
+}
+
+function blurModelInput() {
+  setTimeout(() => (showModelSuggestions.value = false), 150);
+}
 
 async function loadLLM() {
   llmLoading.value = true;
@@ -87,6 +119,29 @@ async function testProvider() {
     testResult.value = { ok: false, error: e.message || String(e) };
   }
 }
+
+async function loadModelsList() {
+  fetchModelsError.value = '';
+  fetchingModels.value = true;
+  try {
+    const r = await llmApi.listModels(editingProvider.value);
+    if (!r.ok) {
+      fetchModelsError.value = r.error || '加载失败';
+      fetchedModels.value = [];
+    } else {
+      fetchedModels.value = r.models;
+    }
+  } catch (e: any) {
+    fetchModelsError.value = e.message || String(e);
+  } finally {
+    fetchingModels.value = false;
+  }
+}
+
+watch(editingProvider, () => {
+  fetchedModels.value = [];
+  fetchModelsError.value = '';
+});
 
 // ─── metrics ───
 const metrics = ref<any>(null);
@@ -161,9 +216,36 @@ onMounted(() => loadLLM());
 
               <!-- 模型 -->
               <div>
-                <label class="text-muted text-xs uppercase tracking-wider mb-1 block">模型</label>
-                <input v-model="editModel" class="w-full h-9 px-2 rounded border border-border bg-transparent text-sm"
-                       :placeholder="llmConfig.providers?.[editingProvider]?.model || ''" />
+                <label class="text-muted text-xs uppercase tracking-wider mb-1 block flex items-center justify-between">
+                  <span>模型</span>
+                  <button v-if="supportsListing"
+                          class="text-[11px] text-accent hover:underline disabled:opacity-50"
+                          :disabled="fetchingModels"
+                          @click="loadModelsList">
+                    {{ fetchingModels ? '加载中…' : (fetchedModels.length ? `刷新 (${fetchedModels.length})` : '加载可用模型') }}
+                  </button>
+                </label>
+                <div class="relative">
+                  <input v-model="editModel"
+                         class="w-full h-9 px-2 rounded border border-border bg-transparent text-sm"
+                         :placeholder="llmConfig.providers?.[editingProvider]?.model || ''"
+                         @focus="showModelSuggestions = true"
+                         @blur="blurModelInput" />
+                  <div v-if="showModelSuggestions && filteredModels.length"
+                       class="absolute left-0 right-0 mt-1 max-h-64 overflow-y-auto rounded border border-border bg-surface shadow-soft z-10">
+                    <button v-for="m in filteredModels" :key="m.id"
+                            type="button"
+                            class="w-full text-left px-2 py-1.5 text-sm hover:bg-sunken transition-colors flex items-baseline justify-between gap-2"
+                            @mousedown.prevent="pickModel(m.id)">
+                      <span class="truncate">{{ m.id }}</span>
+                      <span v-if="m.context_length" class="text-[10px] text-muted shrink-0">{{ (m.context_length / 1000).toFixed(0) }}k</span>
+                    </button>
+                  </div>
+                </div>
+                <div v-if="fetchModelsError" class="text-red-500 text-[11px] mt-1">{{ fetchModelsError }}</div>
+                <div v-else-if="fetchedModels.length" class="text-[11px] text-muted mt-1">
+                  共 {{ fetchedModels.length }} 个模型可选 · 输入框支持搜索
+                </div>
               </div>
 
               <!-- API Key -->

@@ -772,8 +772,17 @@ export interface LLMConfig {
 export interface ProviderMeta {
   label: string;
   needs_api_key: boolean;
+  supports_native_tools?: boolean;
+  supports_listing?: boolean;
   default_models: string[];
   homepage: string;
+}
+
+export interface ModelEntry {
+  id: string;
+  name: string;
+  context_length?: number | null;
+  pricing?: { prompt?: string; completion?: string } | null;
 }
 
 export const llmApi = {
@@ -787,6 +796,10 @@ export const llmApi = {
     ),
   providers: () =>
     api.get<{ current: string; available: string[]; models: Record<string, string> }>('/api/providers'),
+  listModels: (provider: string) =>
+    api.get<{ ok: boolean; models: ModelEntry[]; count?: number; error?: string }>(
+      `/api/llm_config/models?provider=${encodeURIComponent(provider)}`,
+    ),
   metrics: (params?: { hours?: number; provider?: string }) => {
     const qs = new URLSearchParams();
     if (params?.hours) qs.set('hours', String(params.hours));

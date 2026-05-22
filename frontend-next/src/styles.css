@@ -11,6 +11,7 @@
     --text:    31  28  24;    /* #1f1c18 */
     --muted:  107 102  96;
     --accent: 217 119  87;    /* #d97757 */
+    color-scheme: light;
   }
   .dark {
     --bg:       14  13  12;   /* #0e0d0c */
@@ -20,8 +21,16 @@
     --text:    235 230 220;
     --muted:   138 132 122;
     --accent:  217 119  87;
+    color-scheme: dark;
   }
+  html { color-scheme: light; }
+  html.dark { color-scheme: dark; }
   html, body, #app { height: 100%; }
+  /* 给 native select 展开的下拉项手动上色, 否则 Windows Chrome 在暗色主题下会显示白底 */
+  option {
+    background-color: rgb(var(--surface));
+    color: rgb(var(--text));
+  }
   body {
     background-color: rgb(var(--bg));
     color: rgb(var(--text));

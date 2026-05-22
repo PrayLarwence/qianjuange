@@ -14,6 +14,7 @@ from .claude import ClaudeProvider
 from .openai_provider import OpenAIProvider
 from .deepseek import DeepSeekProvider
 from .ollama import OllamaProvider
+from .openrouter import OpenRouterProvider
 
 
 def get_provider(name: str | None = None, kind: str = "", world_id: str = "") -> LLMProvider:
@@ -75,7 +76,7 @@ def get_provider_for_role(world, role: str) -> LLMProvider:
 
 __all__ = [
     "LLMProvider", "LLMResponse", "Message", "ToolCall", "ToolSpec", "BaseProvider",
-    "ClaudeProvider", "OpenAIProvider", "DeepSeekProvider", "OllamaProvider",
+    "ClaudeProvider", "OpenAIProvider", "DeepSeekProvider", "OllamaProvider", "OpenRouterProvider",
     "get_provider", "get_provider_for_role", "PROVIDER_CLASSES",
     "load_config", "save_config", "mask", "get_provider_config",
     "registry",
