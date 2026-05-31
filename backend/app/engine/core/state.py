@@ -18,12 +18,6 @@ def _entity_full(e: Entity) -> dict:
         "attributes": e.attributes or {},
         "state": e.state or {},
         "location_id": e.location_id,
-        "map_x": e.map_x,
-        "map_y": e.map_y,
-        "target_x": e.target_x,
-        "target_y": e.target_y,
-        "move_speed": e.move_speed,
-        "sim_state": e.sim_state or {},
         "persona": e.persona or {},
         "memories": e.memories or [],
         "tags": list(e.tags or []),
@@ -87,73 +81,7 @@ def _entity_for_prompt(e: dict, recent_event_ids: Optional[set[str]] = None) -> 
                 out["memories"] = list(reversed(kept_mems))  # back to chronological order
     if e.get("location_id"):
         out["location_id"] = e["location_id"]
-    mx, my = e.get("map_x"), e.get("map_y")
-    if mx is not None and my is not None:
-        out["pos"] = [mx, my]
-    tx, ty = e.get("target_x"), e.get("target_y")
-    if tx is not None and ty is not None:
-        out["target"] = [tx, ty]
-        if e.get("move_speed"):
-            out["speed"] = e["move_speed"]
-    sim = e.get("sim_state") or {}
-    status = sim.get("status")
-    if status and status != "idle":
-        out["status"] = status
-        if sim.get("blocked_reason"):
-            out["blocked"] = sim["blocked_reason"]
     return out
-
-
-def _build_map_summary(world_id: str, entities: list[Entity]) -> Optional[dict]:
-    """Quick map overview — only included when a map exists."""
-    try:
-        from ..worldgen import worldgen
-    except Exception:
-        return None
-    try:
-        data = worldgen.load(world_id)
-    except Exception:
-        return None
-    if data is None:
-        return None
-    w = int(data.get("width", 0))
-    h = int(data.get("map_h", 0))
-    if w <= 0 or h <= 0:
-        return None
-
-    summary: dict = {
-        "width": w,
-        "height": h,
-        "terrain_codes": worldgen.TERRAIN_LABELS,
-    }
-
-    # Terrain at each pinned entity, so the LLM sees what they're standing on.
-    eff = None
-    try:
-        eff = worldgen.effective_terrain(data)
-    except Exception:
-        eff = data.get("terrain")
-    if eff is not None:
-        positions = []
-        for e in entities:
-            if e.map_x is None or e.map_y is None:
-                continue
-            x, y = int(e.map_x), int(e.map_y)
-            if not (0 <= x < w and 0 <= y < h):
-                continue
-            try:
-                t = int(eff[y, x])
-            except Exception:
-                continue
-            positions.append({
-                "id": e.id,
-                "name": e.name,
-                "pos": [x, y],
-                "terrain": worldgen.TERRAIN_LABELS.get(t, str(t)),
-            })
-        if positions:
-            summary["entities_on_map"] = positions
-    return summary
 
 
 def _load_outline_block(db: Session, world: World) -> Optional[dict]:
@@ -255,9 +183,6 @@ def build_state_snapshot(db: Session, world: World, max_events: int = 30, max_en
         ],
         "recent_narration": [n.text for n in reversed(recent_narration)],
     }
-    map_summary = _build_map_summary(world.id, [e for e in entities if (e.alive or 0) != 0])
-    if map_summary is not None:
-        snapshot["map"] = map_summary
     outline_block = _load_outline_block(db, world)
     if outline_block is not None:
         snapshot["outline_progress"] = outline_block

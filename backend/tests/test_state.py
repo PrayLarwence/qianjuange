@@ -23,44 +23,6 @@ def test_prompt_keeps_meaningful_fields():
     assert out["state"] == {"alive": 1}
 
 
-def test_prompt_position_packed_into_pos():
-    full = {"id": "e1", "type": "character", "name": "x",
-            "map_x": 10, "map_y": 20}
-    out = _entity_for_prompt(full)
-    assert out["pos"] == [10, 20]
-    assert "map_x" not in out and "map_y" not in out
-
-
-def test_prompt_target_with_speed():
-    full = {"id": "e1", "type": "character", "name": "x",
-            "target_x": 5, "target_y": 6, "move_speed": 2.5}
-    out = _entity_for_prompt(full)
-    assert out["target"] == [5, 6]
-    assert out["speed"] == 2.5
-
-
-def test_prompt_partial_position_dropped():
-    """只有 x 没有 y 时不应输出 pos —— 防止脏数据漏出。"""
-    full = {"id": "e1", "type": "character", "name": "x", "map_x": 10}
-    out = _entity_for_prompt(full)
-    assert "pos" not in out
-
-
-def test_prompt_status_idle_dropped():
-    full = {"id": "e1", "type": "character", "name": "x",
-            "sim_state": {"status": "idle"}}
-    out = _entity_for_prompt(full)
-    assert "status" not in out
-
-
-def test_prompt_status_blocked_kept():
-    full = {"id": "e1", "type": "character", "name": "x",
-            "sim_state": {"status": "moving", "blocked_reason": "山"}}
-    out = _entity_for_prompt(full)
-    assert out["status"] == "moving"
-    assert out["blocked"] == "山"
-
-
 def test_build_state_snapshot_minimal(db, world_factory):
     """落库一个空世界后，build_state_snapshot 应给出合法 shape。"""
     from app.engine.core.state import build_state_snapshot

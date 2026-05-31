@@ -10,7 +10,6 @@ const Overview = () => import('@/views/world/OverviewView.vue');
 const Chapters = () => import('@/views/world/ChaptersView.vue');
 const Graph    = () => import('@/views/world/GraphView.vue');
 const Timeline = () => import('@/views/world/TimelineView.vue');
-const MapView  = () => import('@/views/world/MapView.vue');
 const Cast     = () => import('@/views/world/CastView.vue');
 const Lore     = () => import('@/views/world/LoreView.vue');
 const Sim      = () => import('@/views/world/SimView.vue');
@@ -32,7 +31,6 @@ const routes: RouteRecordRaw[] = [
       { path: 'chapters',  name: 'world.chapters', component: Chapters },
       { path: 'graph',     name: 'world.graph',    component: Graph },
       { path: 'timeline',  name: 'world.timeline', component: Timeline },
-      { path: 'map',       name: 'world.map',      component: MapView },
       { path: 'cast',      name: 'world.cast',     component: Cast },
       { path: 'lore',      name: 'world.lore',     component: Lore },
       { path: 'sim',       name: 'world.sim',      component: Sim },

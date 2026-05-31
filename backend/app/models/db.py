@@ -79,18 +79,6 @@ def _migrate() -> None:
             conn.exec_driver_sql("ALTER TABLE events ADD COLUMN deleted INTEGER DEFAULT 0")
         try:
             ecols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(entities)").fetchall()}
-            if ecols and "map_x" not in ecols:
-                conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN map_x INTEGER")
-            if ecols and "map_y" not in ecols:
-                conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN map_y INTEGER")
-            if ecols and "target_x" not in ecols:
-                conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN target_x INTEGER")
-            if ecols and "target_y" not in ecols:
-                conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN target_y INTEGER")
-            if ecols and "move_speed" not in ecols:
-                conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN move_speed REAL DEFAULT 1.0")
-            if ecols and "sim_state" not in ecols:
-                conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN sim_state TEXT DEFAULT '{}'")
             if ecols and "persona" not in ecols:
                 conn.exec_driver_sql("ALTER TABLE entities ADD COLUMN persona TEXT DEFAULT '{}'")
             if ecols and "memories" not in ecols:
@@ -122,14 +110,6 @@ def _migrate() -> None:
                 conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN outline_progress TEXT DEFAULT '{}'")
             if wcols and "max_tick" not in wcols:
                 conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN max_tick INTEGER DEFAULT 0")
-            if wcols and "map_w" not in wcols:
-                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN map_w INTEGER DEFAULT 0")
-            if wcols and "map_h" not in wcols:
-                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN map_h INTEGER DEFAULT 0")
-            if wcols and "map_seed" not in wcols:
-                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN map_seed INTEGER DEFAULT 0")
-            if wcols and "map_meta" not in wcols:
-                conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN map_meta TEXT DEFAULT '{}'")
             if wcols and "outline" not in wcols:
                 conn.exec_driver_sql("ALTER TABLE worlds ADD COLUMN outline TEXT DEFAULT ''")
             # 阶段 0：多 agent 管线相关字段
