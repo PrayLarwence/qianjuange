@@ -30,6 +30,7 @@ class StepRequest(BaseModel):
     directive: str | None = None
     provider: str | None = None
     steps: int = 1
+    force_legacy: bool = False  # 显式要求跳过 orchestrator
 
 
 
@@ -101,6 +102,7 @@ def step_async(world_id: str, payload: StepRequest, db: Session = Depends(get_db
     provider_key = payload.provider
     directive = payload.directive
     steps = max(1, payload.steps or 1)
+    force_legacy = payload.force_legacy
 
     def runner():
         local_db = SessionLocal()
@@ -120,26 +122,82 @@ def step_async(world_id: str, payload: StepRequest, db: Session = Depends(get_db
                 local_db.rollback()
             provider = get_provider(provider_key) if provider_key else None
 
-            def progress(info):
-                if "tool_calls" in info:
-                    job.tool_calls = list(info["tool_calls"])
-                if "narration" in info:
-                    job.narration = info["narration"]
-                phase = info.get("phase", "")
-                if phase == "step_start":
-                    job.progress_message = f"第 {info['step']}/{info['total']} 步开始"
-                elif phase == "thinking":
-                    job.progress_message = f"AI 思考中（hop {info.get('hop', 0)+1}）"
-                elif phase == "executing":
-                    job.progress_message = f"已执行 {len(job.tool_calls)} 个工具"
+            # Auto-upgrade to orchestrator if pipeline config exists
+            use_orchestrator = False
+            cfg = None
+            if not force_legacy:
+                try:
+                    from ..engine.agents.agent_pipeline import resolve_for_world
+                    cfg = resolve_for_world(local_world.agent_pipeline)
+                    use_orchestrator = True
+                except Exception:
+                    pass
 
-            results = run_auto(
-                local_db, local_world, steps=steps,
-                user_directive=directive, provider=provider,
-                cancel_check=job.is_cancelled, on_progress=progress,
-            )
-            job.result = {"results": results, "tick": local_world.current_tick}
-            job.status = "cancelled" if job.is_cancelled() else "completed"
+            if use_orchestrator and cfg:
+                from ..engine.orchestrator import run_orchestrated_step
+                from ..engine.orchestrator import BudgetExhausted
+
+                def progress(info):
+                    phase = info.get("phase", "")
+                    if phase == "orchestrator_start":
+                        job.progress_message = "编排开始"
+                    elif phase == "step_start":
+                        job.progress_message = "Director 开始推演"
+                    elif phase == "thinking":
+                        job.progress_message = f"Director 思考中（hop {info.get('hop', 0)+1}）"
+                    elif phase == "executing":
+                        job.progress_message = "Director 执行工具"
+                    elif phase == "step_done":
+                        job.progress_message = "Director 完成，进入 Author 阶段"
+                    elif phase == "orchestrator_done":
+                        job.progress_message = f"完成：{info.get('verdict')}（{info.get('rounds')} 轮 critic）"
+                    if "tool_calls" in info:
+                        job.tool_calls = list(info["tool_calls"])
+                    if "narration" in info:
+                        job.narration = info["narration"]
+
+                results = []
+                try:
+                    for i in range(steps):
+                        if job.is_cancelled():
+                            break
+                        result = run_orchestrated_step(
+                            local_db, local_world,
+                            user_directive=directive,
+                            job_id=job.id,
+                            cfg=cfg,
+                            cancel_check=job.is_cancelled,
+                            on_progress=progress,
+                            provider=provider,
+                        )
+                        results.append(result)
+                    job.result = {"results": results, "tick": local_world.current_tick}
+                    job.status = "cancelled" if job.is_cancelled() else "completed"
+                except BudgetExhausted as e:
+                    job.error = f"budget exhausted: {e.kind} (limit={e.limit}, used={e.used})"
+                    job.status = "error"
+            else:
+                # Legacy path
+                def progress(info):
+                    if "tool_calls" in info:
+                        job.tool_calls = list(info["tool_calls"])
+                    if "narration" in info:
+                        job.narration = info["narration"]
+                    phase = info.get("phase", "")
+                    if phase == "step_start":
+                        job.progress_message = f"第 {info['step']}/{info['total']} 步开始"
+                    elif phase == "thinking":
+                        job.progress_message = f"AI 思考中（hop {info.get('hop', 0)+1}）"
+                    elif phase == "executing":
+                        job.progress_message = f"已执行 {len(job.tool_calls)} 个工具"
+
+                results = run_auto(
+                    local_db, local_world, steps=steps,
+                    user_directive=directive, provider=provider,
+                    cancel_check=job.is_cancelled, on_progress=progress,
+                )
+                job.result = {"results": results, "tick": local_world.current_tick}
+                job.status = "cancelled" if job.is_cancelled() else "completed"
         except CancelledError:
             job.status = "cancelled"
         except Exception as e:

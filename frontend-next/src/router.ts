@@ -16,6 +16,7 @@ const Sim      = () => import('@/views/world/SimView.vue');
 const AgentRun = () => import('@/views/world/AgentRunView.vue');
 const Review   = () => import('@/views/world/ReviewView.vue');
 const Storyboard = () => import('@/views/world/StoryboardView.vue');
+const Reflection = () => import('@/views/world/ReflectionView.vue');
 const WorldSet = () => import('@/views/world/WorldSettingsView.vue');
 
 const routes: RouteRecordRaw[] = [
@@ -37,6 +38,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'agent-run', name: 'world.agent-run', component: AgentRun },
       { path: 'review',    name: 'world.review',     component: Review },
       { path: 'storyboard', name: 'world.storyboard', component: Storyboard },
+      { path: 'reflection', name: 'world.reflection', component: Reflection },
       { path: 'settings',  name: 'world.settings',   component: WorldSet },
     ],
   },

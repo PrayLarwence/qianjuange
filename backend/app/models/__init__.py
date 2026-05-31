@@ -3,7 +3,8 @@ from .world import (
     World, Branch, Entity, Event, CausalLink, Snapshot, NarrativeLog,
     ChapterMarker, ChapterFeedback, WorldTemplate, ConsistencyIssue, ScanRun, PlotThread,
     StyleProfile, EntitySnapshot, EmbeddingChunk, ChapterSummary, WorldLore,
-    IssuePatch, AgentTrace, LlmCallMetric, ManuscriptChunk,
+    IssuePatch, AgentTrace, LlmCallMetric, ManuscriptChunk, ReaderState,
+    ReflectionMemory,
 )
 
 __all__ = [
@@ -12,5 +13,5 @@ __all__ = [
     "ChapterMarker", "ChapterFeedback", "WorldTemplate", "PlotThread",
     "ConsistencyIssue", "ScanRun",
     "StyleProfile", "EntitySnapshot", "EmbeddingChunk", "ChapterSummary",
-    "WorldLore", "IssuePatch", "AgentTrace",
+    "WorldLore", "IssuePatch", "AgentTrace", "ReaderState", "ReflectionMemory",
 ]

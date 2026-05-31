@@ -204,6 +204,23 @@ class WorldLore(Base):
 Index("ix_world_lore_world_priority", WorldLore.world_id, WorldLore.priority.desc())
 
 
+class ReflectionMemory(Base):
+    __tablename__ = "reflection_memories"
+    id = Column(String, primary_key=True)
+    world_id = Column(String, ForeignKey("worlds.id"), nullable=True, index=True)
+    agent_type = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    content = Column(Text, default="")
+    enabled = Column(Integer, default=1)
+    source_tick = Column(Integer, nullable=True)
+    source_event = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+Index("ix_reflection_world_agent", ReflectionMemory.world_id, ReflectionMemory.agent_type)
+
+
 class WorldTemplate(Base):
     __tablename__ = "world_templates"
     id = Column(String, primary_key=True)
@@ -270,6 +287,9 @@ class StyleProfile(Base):
     spec_text 是给 Author 的风格指令；sample_paragraphs 是范文片段（比 spec_text
     重要，是真正的"风格指纹"原料）；frozen=1 表示已锁定不允许修改（首次满意后
     用户冻结）。
+
+    negative_rules: 结构化反提示词列表，每条 {label, description, enabled}。
+    builtin_source_id: custom 类型时记录从哪个 builtin 复制而来，用于一键恢复。
     """
     __tablename__ = "style_profiles"
     id = Column(String, primary_key=True)
@@ -280,6 +300,8 @@ class StyleProfile(Base):
     description = Column(Text, default="")  # 一行描述，UI 卡片用
     spec_text = Column(Text, default="")  # 给 Author 的完整风格 spec
     sample_paragraphs = Column(JSON, default=list)  # [{title, text}] 范文片段
+    negative_rules = Column(JSON, default=list)  # [{label, description, enabled}]
+    builtin_source_id = Column(String, nullable=True)  # custom 从哪个 builtin 派生
     frozen = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow)
@@ -414,3 +436,25 @@ class LlmCallMetric(Base):
     status = Column(String, default="ok")                      # ok|error
     error = Column(String, default="")
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ReaderState(Base):
+    """Reader Agent 的持久化状态。每个 branch 一行，每章结束后更新。
+
+    character_states: [{name, location, emotion, status, inventory, notes}]
+    plot_threads: [{id, title, status, opened_chapter, notes}]
+    chapter_summaries: [{chapter, tick_range, summary}]  — 摘要链
+    last_brief: 上一次产出的 continuity brief（给 Chapter AI 用）
+    """
+    __tablename__ = "reader_states"
+    id = Column(String, primary_key=True)
+    branch_id = Column(String, ForeignKey("branches.id"), nullable=False, unique=True, index=True)
+    world_id = Column(String, ForeignKey("worlds.id"), nullable=False, index=True)
+    character_states = Column(JSON, default=list)
+    plot_threads = Column(JSON, default=list)
+    chapter_summaries = Column(JSON, default=list)
+    foreshadowing = Column(JSON, default=list)  # [{id, description, planted_chapter, resolved}]
+    prohibitions = Column(JSON, default=list)  # [{description, until_chapter}] 禁区
+    last_brief = Column(Text, default="")
+    last_chapter_tick = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow)

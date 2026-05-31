@@ -25,7 +25,7 @@ cd frontend-next && npm run dev
 # 一键（Windows）
 run.bat
 
-# 测试（508 项 pytest，FakeProvider 替身，不打真 LLM）
+# 测试（527 项 pytest，FakeProvider 替身，不打真 LLM）
 run-tests.bat
 # 或手动
 cd backend && ../.venv/Scripts/python -m pytest

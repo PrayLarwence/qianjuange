@@ -122,6 +122,11 @@ export const worldsApi = {
     }>('/api/worlds/from_manuscript', body),
   fromManuscriptAsync: (body: { name: string; text: string; description?: string }) =>
     api.post<{ job_id: string; message: string }>('/api/worlds/from_manuscript_async', body),
+  quickCreate: (body: { genre: string; description?: string; name?: string }) =>
+    api.post<{
+      id: string; name: string; active_branch_id: string;
+      style_profile_id: string; characters: number; has_outline: boolean;
+    }>('/api/worlds/quick_create', body),
   manuscriptState: (id: string) =>
     api.get<ManuscriptState>(`/api/worlds/${id}/manuscript/state`),
   extractManuscriptEvents: (
@@ -662,46 +667,6 @@ export const loreApi = {
   ),
 };
 
-// ---------- 地图 ----------
-export interface MapMeta {
-  exists: boolean;
-  width: number;
-  height: number;
-  seed: number;
-  meta: Record<string, unknown>;
-  biomes: Record<string, { label: string; color: [number, number, number] }>;
-  terrains: Record<string, string>;
-}
-
-export interface MapPin {
-  id: string;
-  name: string;
-  type: string;
-  x: number;
-  y: number;
-}
-
-export const mapApi = {
-  meta: (worldId: string) => api.get<MapMeta>(`/api/worlds/${worldId}/map`),
-  pinned: (worldId: string) =>
-    api.get<{ items: MapPin[] }>(`/api/worlds/${worldId}/map/pinned`).then(r => r.items),
-  renderUrl: (worldId: string, layer: 'biome' | 'terrain' | 'height' | 'temp' | 'moist' = 'biome') =>
-    `/api/worlds/${worldId}/map/render.png?layer=${layer}&_t=${Date.now()}`,
-  generate: (
-    worldId: string,
-    body: {
-      width?: number; height?: number; seed?: number;
-      sea_level?: number; octaves?: number; persistence?: number;
-      base_freq?: number; warp?: number;
-    },
-  ) => api.post<{ ok: boolean; width: number; height: number; seed: number }>(
-    `/api/worlds/${worldId}/map/generate`, body,
-  ),
-  drop: (worldId: string) =>
-    api.delete<{ ok: boolean; removed: boolean }>(`/api/worlds/${worldId}/map`),
-  pin: (worldId: string, body: { entity_id: string; x: number | null; y: number | null }) =>
-    api.post<{ ok: boolean }>(`/api/worlds/${worldId}/map/pin`, body),
-};
 
 // ---------- 风格档案 ----------
 export interface StyleProfileSummary {
@@ -713,15 +678,39 @@ export interface StyleProfileSummary {
   frozen: boolean;
 }
 
+export interface NegativeRule {
+  label: string;
+  description: string;
+  enabled: boolean;
+}
+
 export interface StyleProfileDetail extends StyleProfileSummary {
   spec_text: string;
-  sample_paragraphs: string[];
+  sample_paragraphs: Array<{ title?: string; text: string } | string>;
+  negative_rules: NegativeRule[];
+  builtin_source_id: string;
 }
 
 export const stylesApi = {
   list: () => api.get<{ profiles: StyleProfileSummary[] }>('/api/style_profiles')
     .then(r => r.profiles),
   get: (id: string) => api.get<StyleProfileDetail>(`/api/style_profiles/${id}`),
+  create: (body: { source_id: string; name: string; world_id?: string }) =>
+    api.post<{ id: string; name: string; kind: string; builtin_source_id: string }>(
+      '/api/style_profiles', body,
+    ),
+  update: (id: string, body: {
+    name?: string;
+    description?: string;
+    spec_text?: string;
+    sample_paragraphs?: Array<{ title?: string; text: string }>;
+    negative_rules?: NegativeRule[];
+  }) => api.patch<{ ok: boolean; id: string }>(`/api/style_profiles/${id}`, body),
+  reset: (id: string) =>
+    api.post<{ ok: boolean; id: string; reset_from: string }>(
+      `/api/style_profiles/${id}/reset`, {},
+    ),
+  delete: (id: string) => api.delete<{ ok: boolean }>(`/api/style_profiles/${id}`),
 };
 
 // ---------- 故事板 ----------
@@ -808,3 +797,35 @@ export const llmApi = {
   },
 };
 
+// ---------- 反思记忆 ----------
+export interface ReflectionEntry {
+  id: string;
+  world_id: string;
+  agent_type: string;
+  title: string;
+  content: string;
+  enabled: boolean;
+  source_tick: number | null;
+  source_event: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export const reflectionApi = {
+  list: (worldId: string, agentType?: string) => {
+    const qs = agentType ? `?agent_type=${encodeURIComponent(agentType)}` : '';
+    return api.get<{ reflections: ReflectionEntry[] }>(`/api/worlds/${worldId}/reflections${qs}`).then(r => r.reflections);
+  },
+  create: (
+    worldId: string,
+    body: { agent_type: string; title: string; content?: string; enabled?: boolean; source_tick?: number; source_event?: string },
+  ) => api.post<ReflectionEntry>(`/api/worlds/${worldId}/reflections`, body),
+  patch: (
+    id: string,
+    body: Partial<{ agent_type: string; title: string; content: string; enabled: boolean; source_tick: number; source_event: string }>,
+  ) => api.patch<{ ok: boolean }>(`/api/reflections/${id}`, body),
+  remove: (id: string) =>
+    api.delete<{ ok: boolean }>(`/api/reflections/${id}`),
+  seed: (worldId: string) =>
+    api.post<{ seeded: number; message?: string }>(`/api/worlds/${worldId}/reflections/seed`),
+};

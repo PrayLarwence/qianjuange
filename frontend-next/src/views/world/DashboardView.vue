@@ -470,8 +470,8 @@ function goSettings(section: string) {
       <!-- 最近事件 -->
       <h2 class="text-sm uppercase tracking-wider text-muted mb-3">最近事件</h2>
       <div class="stat-card mb-8">
-        <div v-if="(snapshot?.events || []).length" class="space-y-2">
-          <div v-for="ev in (snapshot.events || []).slice(-8).reverse()" :key="ev.id"
+        <div v-if="(snapshot?.recent_events || []).length" class="space-y-2">
+          <div v-for="ev in (snapshot.recent_events || []).slice(-8).reverse()" :key="ev.id"
                class="flex items-start gap-3 text-sm py-1 border-b border-border/30 last:border-0">
             <span class="text-muted font-mono text-xs flex-shrink-0 w-20">tick {{ ev.tick }}</span>
             <span class="font-medium truncate">{{ ev.title }}</span>

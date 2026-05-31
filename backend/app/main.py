@@ -12,9 +12,9 @@ load_dotenv()
 
 from .models import init_db
 from .api.routes import router as api_router
-from .api.map_routes import router as map_router
 from .api.dialogue_routes import router as dialogue_router
 from .api.lore_routes import router as lore_router
+from .api.reflection_routes import router as reflection_router
 from .api.stats_routes import router as stats_router
 from .api.storyboard_aux_routes import router as storyboard_aux_router
 from .providers import load_config
@@ -61,9 +61,9 @@ def _startup():
 
 
 app.include_router(api_router, prefix="/api")
-app.include_router(map_router, prefix="/api")
 app.include_router(dialogue_router, prefix="/api")
 app.include_router(lore_router, prefix="/api")
+app.include_router(reflection_router, prefix="/api")
 app.include_router(stats_router, prefix="/api")
 app.include_router(storyboard_aux_router, prefix="/api")
 

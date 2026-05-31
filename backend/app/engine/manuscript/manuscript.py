@@ -30,19 +30,35 @@ POLISH_SYSTEM = """你是小说编辑，负责把零散的叙事段落整合成�
 
 
 def _gather_chapters(db: Session, branch_id: str) -> list[dict]:
-    """按 tick 切分章节，每章带 narration 列表。"""
+    """按 tick 切分章节，每章带 narration 列表。
+
+    展示规则：只取 author_final。如果某 tick 没有 author_final，跳过该 tick
+    （不 fallback 到 narrator 原始事件流）。
+    """
     markers = (
         db.query(ChapterMarker)
         .filter_by(branch_id=branch_id)
         .order_by(ChapterMarker.tick.asc())
         .all()
     )
-    narrations = (
+    all_rows = (
         db.query(NarrativeLog)
         .filter_by(branch_id=branch_id)
+        .filter(NarrativeLog.role == "author_final")
         .order_by(NarrativeLog.tick.asc(), NarrativeLog.created_at.asc())
         .all()
     )
+
+    # 每 tick 取最新的 author_final
+    by_tick: dict[int, list[NarrativeLog]] = {}
+    for r in all_rows:
+        by_tick.setdefault(r.tick, []).append(r)
+    narrations: list[NarrativeLog] = []
+    for tick in sorted(by_tick.keys()):
+        items = by_tick[tick]
+        finals = [x for x in items if (x.text or "").strip()]
+        if finals:
+            narrations.append(finals[-1])
 
     if not markers:
         return [{
@@ -147,17 +163,34 @@ def build_manuscript(
             "body": body,
         })
 
+    # 检查是否有 narrator 但没有 author_final（提示用户需要重新推演）
+    has_narrator_only = False
+    if not rendered:
+        narrator_count = (
+            db.query(NarrativeLog)
+            .filter_by(branch_id=branch_id)
+            .filter(NarrativeLog.role == "narrator")
+            .count()
+        )
+        has_narrator_only = narrator_count > 0
+
     if fmt == "json":
-        return {
+        result = {
             "format": "json",
             "world_name": world.name,
             "chapters": rendered,
             "total_chars": total_chars,
             "chapter_count": len(rendered),
         }
+        if has_narrator_only:
+            result["hint"] = "存在未经 Author 改写的事件记录，请重新推演以生成定稿"
+        return result
 
     if fmt == "text":
         lines = [world.name, "=" * 40, ""]
+        if has_narrator_only:
+            lines.append("[提示] 存在未经 Author 改写的事件记录，请重新推演以生成定稿")
+            lines.append("")
         for ch in rendered:
             lines.append(ch["title"])
             lines.append("-" * 20)
@@ -169,12 +202,15 @@ def build_manuscript(
             "content": "\n".join(lines),
             "total_chars": total_chars,
             "chapter_count": len(rendered),
+            **({"hint": "存在未经 Author 改写的事件记录，请重新推演以生成定稿"} if has_narrator_only else {}),
         }
 
     md = [f"# {world.name}", ""]
     if world.description:
         md.append(f"> {world.description}")
         md.append("")
+    if has_narrator_only:
+        md.append("> ⚠️ 存在未经 Author 改写的事件记录，请重新推演以生成定稿\n")
     for ch in rendered:
         md.append(f"## {ch['title']}")
         md.append("")
@@ -186,4 +222,5 @@ def build_manuscript(
         "content": "\n".join(md),
         "total_chars": total_chars,
         "chapter_count": len(rendered),
+        **({"hint": "存在未经 Author 改写的事件记录，请重新推演以生成定稿"} if has_narrator_only else {}),
     }

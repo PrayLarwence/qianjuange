@@ -40,6 +40,8 @@ from .branches_api import router as _branches_router
 router.include_router(_branches_router)
 from .timeline_api import router as _timeline_router
 router.include_router(_timeline_router)
+from .quick_create_api import router as _quick_create_router
+router.include_router(_quick_create_router)
 from .worlds_api import router as _worlds_router
 router.include_router(_worlds_router)
 from .world_settings_api import router as _world_settings_router

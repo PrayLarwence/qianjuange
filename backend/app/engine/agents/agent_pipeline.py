@@ -101,7 +101,21 @@ def _builtin_default() -> PipelineConfig:
     return PipelineConfig(
         directors=[DirectorAgent(name="director", system_prompt_extra="")],
         authors=[AuthorAgent(name="author", system_prompt_extra="")],
-        critics=[],
+        critics=[
+            CriticAgent(
+                name="AI腔检测",
+                focus=(
+                    "专职检测 AI 生成痕迹。重点关注：破折号密度（一段超过1个即扣分）；"
+                    "让步转折句式堆叠；段尾哲理收束；修辞密度过于均匀；"
+                    "「不是X。是Y。」「那一瞬间」「隐隐」「像有什么东西在……」等 AI 高频表达；"
+                    "对白过于精准无废话；动作分解癖（简单动作拆成微动作序列）；"
+                    "情绪直接命名而非通过行为/感官传达。"
+                    "只要出现 2 条以上即判 revise。"
+                ),
+                severity="strict",
+                kind="general",
+            ),
+        ],
         max_critic_retries=3,
         critic_mode="parallel",
         budget=BudgetConfig(),

@@ -1,21 +1,20 @@
-"""Turn raw event/state data into a readable novel-style markdown document.
+"""Assemble novel manuscript from author_final narrative logs.
 
 Pipeline:
   1. slice the timeline into chapters (manual ChapterMarker, by-tick, by-count, or one chunk)
-  2. for each chapter, ask the LLM to weave events into prose, with persona/voice context
-  3. concatenate, prepend a frontmatter, return markdown
+  2. for each chapter, collect author_final logs (produced during simulation by the Author agent)
+  3. LLM editorial pass: unify voice, smooth seams, adjust pacing, fill micro-gaps
+  4. fallback: direct concatenation when no LLM is available (marked as unedited)
 
-The LLM call is the expensive part. We expose `on_progress` so callers can
-stream chapter-by-chapter status. In mock mode (no provider) we fall back to
-a template renderer so the export feature still works end-to-end without keys.
+The editorial pass does NOT invent new plot events — it reshapes existing prose into
+a cohesive chapter that reads as continuous narrative rather than stitched fragments.
 """
 
 from __future__ import annotations
-import json
 import logging
-import os
-from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Optional
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
@@ -25,7 +24,6 @@ from ...providers import LLMProvider, Message, get_provider
 log = logging.getLogger(__name__)
 
 
-# Chapter slicing strategies.
 STRATEGY_MANUAL = "manual"
 STRATEGY_BY_TICK = "by_tick"
 STRATEGY_BY_COUNT = "by_count"
@@ -49,25 +47,30 @@ class ChapterOutput:
     tick_hi: int
     markdown: str
     event_count: int
+    gap_ticks: list[int] = field(default_factory=list)
+    edited: bool = False
 
 
-# How many trailing characters of the previous chapter to keep as context.
-PREV_TAIL_CHARS = 600
+CHAPTER_EDIT_SYSTEM = """你是一名专业小说编辑。你收到的是同一章节内、按时间顺序排列的若干段定稿文字（来自不同回合的创作）。
 
-# Per-chapter LLM cap.
-CHAPTER_MAX_TOKENS = 3000
+你的任务是将这些片段编辑成一个连贯、流畅、可直接出版的章节。
 
+## 你必须做的
+1. **统一叙事视角和时态**：消除片段之间的视角跳跃
+2. **补充场景转换**：在时间/空间跳跃处加入自然的过渡（1-3 句）
+3. **调整节奏**：合并过于碎片化的短段，拆分过于臃肿的长段
+4. **消除拼接痕迹**：删除重复的背景交代、重复的人物介绍、段落间的割裂感
+5. **统一文风**：如果不同片段风格有差异，统一到最好的那个水准
+6. **保持章节完整性**：开头要有代入感，结尾要有余韵或悬念
 
-SYSTEM_PROMPT = """你是一个小说改写者。你的工作是把【世界推演产生的事件流】改写成连贯、可读的中文小说章节。
+## 你绝对不能做的
+1. 不能新增情节事件（没发生的事不能编造）
+2. 不能删除已发生的关键事件
+3. 不能改变人物关系和情节走向
+4. 不能改变人物性格和说话方式
 
-铁律：
-1. 不增不减剧情。事件清单里发生的事必须全都出现；事件清单里没发生的事不许编造（包括人物没说过的话、没去过的地方）。
-2. 允许的"润色"只包括：把对白复原成具体台词、补全场景的天气/光线/动作细节、调整语序使叙述流畅、合并琐碎事件为一段动作描写。
-3. 视角与口吻请贴合 persona：每个角色的台词必须符合其 voice（语气）字段；不要让一个"豪迈"的人说出"谨慎"的话。
-4. 输出纯散文 Markdown：以 # 章节标题 开头，正文段落以空行分隔。不要列出事件编号、不要写"事件 1:"这样的元信息。
-5. 不要给章节加摘要、不要写"上回提要 / 总结"。
-6. 严格使用简体中文（除非世界规则另有规定）。
-"""
+## 输出
+直接输出编辑后的完整章节正文。以 # 章节标题 开头。不要加任何编辑说明。"""
 
 
 def list_chapters(
@@ -95,10 +98,8 @@ def list_chapters(
                      .filter_by(branch_id=branch_id)
                      .order_by(ChapterMarker.tick).all())
         if not markers:
-            # Fall back to single chapter when user hasn't placed markers.
             return [_make_slice(1, "全文", events, None, None)]
         slices: list[ChapterSlice] = []
-        # Boundary: events with tick < first marker form an "前章" prologue if any.
         first_tick = markers[0].tick
         if events[0].tick < first_tick:
             pro = [e for e in events if e.tick < first_tick]
@@ -167,8 +168,14 @@ def novelize_branch(
     tick_hi: Optional[int] = None,
     provider: Optional[LLMProvider] = None,
     on_progress: Optional[Callable[[dict], None]] = None,
+    smooth_transitions: bool = True,
 ) -> dict:
-    """Render a branch into novel-style markdown, chapter by chapter."""
+    """Assemble a branch into publishable novel markdown from author_final logs.
+
+    When a provider is available, each chapter goes through an LLM editorial pass
+    that unifies voice, smooths seams, and adjusts pacing. No new plot is invented.
+    Without LLM, chapters are concatenated raw (marked edited=False).
+    """
     branch = db.query(Branch).filter_by(id=branch_id).first()
     if not branch:
         raise ValueError(f"branch {branch_id} not found")
@@ -182,31 +189,59 @@ def novelize_branch(
             "branch_name": branch.name,
             "chapters": [],
             "markdown": _frontmatter(world, branch) + "\n（这条分支还没有事件可改写）\n",
+            "gaps": [],
         }
 
     if on_progress:
         on_progress({"phase": "start", "chapter_total": len(chapters)})
 
-    # gather entity/event corpus once — cheaper than per-chapter queries
-    all_event_ids = [eid for ch in chapters for eid in ch.event_ids]
-    events_by_id = {
-        e.id: e for e in
-        db.query(Event).filter(Event.id.in_(all_event_ids)).all()
-    } if all_event_ids else {}
-    entities_by_id = {
-        e.id: e for e in
-        db.query(Entity).filter_by(branch_id=branch_id).all()
-    }
+    # Collect all author_final logs for this branch in the relevant tick range
+    global_lo = min(ch.tick_lo for ch in chapters)
+    global_hi = max(ch.tick_hi for ch in chapters)
+    _ROLE_PRIORITY = ["author_final", "narrator", "director_draft"]
+    finals: list[NarrativeLog] = []
+    for role in _ROLE_PRIORITY:
+        finals = (
+            db.query(NarrativeLog)
+            .filter(
+                NarrativeLog.branch_id == branch_id,
+                NarrativeLog.role == role,
+                NarrativeLog.tick >= global_lo,
+                NarrativeLog.tick <= global_hi,
+            )
+            .order_by(NarrativeLog.tick.asc(), NarrativeLog.created_at.desc())
+            .all()
+        )
+        if finals:
+            break
 
-    llm = provider
-    if llm is None and (os.getenv("LLM_PROVIDER", "") or "").strip().lower() != "mock":
+    if not finals:
+        log.warning("novelize: no narrative logs found for branch %s ticks %d-%d", branch_id, global_lo, global_hi)
+
+    # Group by tick, keep only the latest revision per tick
+    finals_by_tick: dict[int, NarrativeLog] = {}
+    for f in finals:
+        if f.tick not in finals_by_tick:
+            finals_by_tick[f.tick] = f
+
+    # Resolve LLM for editorial pass
+    llm: Optional[LLMProvider] = None
+    if smooth_transitions and provider:
+        llm = provider
+    elif smooth_transitions:
         try:
             llm = get_provider()
         except Exception:
+            log.warning("no LLM provider available for novelize editorial pass, falling back to raw concatenation")
             llm = None
 
+    # Build reflection block for editorial pass
+    reflection_block = ""
+    if llm:
+        from ..reflection import build_reflection_block
+        reflection_block = build_reflection_block(db, world.id, "author")
+
     rendered: list[ChapterOutput] = []
-    prev_tail = ""
     for ch in chapters:
         if on_progress:
             on_progress({
@@ -215,22 +250,42 @@ def novelize_branch(
                 "chapter_total": len(chapters),
                 "title": ch.title,
             })
-        ch_events = [events_by_id[eid] for eid in ch.event_ids if eid in events_by_id]
-        cast = _cast_for_chapter(ch_events, entities_by_id)
-        try:
-            md = _render_chapter(world, branch, ch, ch_events, cast, prev_tail, llm)
-        except Exception as e:
-            log.exception("chapter %d render failed", ch.index)
-            md = _render_chapter_fallback(ch, ch_events, cast, error=str(e))
+
+        # Collect author_final texts for this chapter's tick range
+        tick_texts: list[tuple[int, str]] = []
+        for t in range(ch.tick_lo, ch.tick_hi + 1):
+            if t in finals_by_tick:
+                text = (finals_by_tick[t].text or "").strip()
+                if text:
+                    tick_texts.append((t, text))
+
+        # Fallback: synthesize from event descriptions if no narrative logs
+        if not tick_texts:
+            ev_parts: list[str] = []
+            for eid in ch.event_ids:
+                ev = db.query(Event).filter_by(id=eid).first()
+                if ev:
+                    desc = (ev.description or ev.title or "").strip()
+                    if desc:
+                        ev_parts.append(desc)
+            if ev_parts:
+                tick_texts = [(ch.tick_lo, "\n\n".join(ev_parts))]
+
+        if not tick_texts:
+            continue
+
+        md, edited = _assemble_chapter(ch, tick_texts, llm, reflection_block)
         rendered.append(ChapterOutput(
             index=ch.index,
             title=ch.title,
             tick_lo=ch.tick_lo,
             tick_hi=ch.tick_hi,
             markdown=md,
-            event_count=len(ch_events),
+            event_count=len(ch.event_ids),
+            gap_ticks=[],
+            edited=edited,
         ))
-        prev_tail = md[-PREV_TAIL_CHARS:]
+
         if on_progress:
             on_progress({
                 "phase": "chapter_done",
@@ -246,9 +301,96 @@ def novelize_branch(
     return {
         "world_name": world.name,
         "branch_name": branch.name,
-        "chapters": [c.__dict__ for c in rendered],
+        "chapters": [
+            {
+                "index": c.index, "title": c.title,
+                "tick_lo": c.tick_lo, "tick_hi": c.tick_hi,
+                "markdown": c.markdown, "event_count": c.event_count,
+                "edited": c.edited,
+            }
+            for c in rendered
+        ],
         "markdown": full_md,
     }
+
+
+def _strip_leading_title(text: str, title: str) -> str:
+    """去掉文本开头的章节标题行（# 第X章 或纯文字标题）。"""
+    lines = text.split("\n", 1)
+    first = lines[0].strip().lstrip("#").strip()
+    if first == title.strip() or first.startswith(title.strip()):
+        return lines[1].lstrip("\n") if len(lines) > 1 else ""
+    return text
+
+
+def _assemble_chapter(
+    ch: ChapterSlice,
+    tick_texts: list[tuple[int, str]],
+    llm: Optional[LLMProvider],
+    reflection_block: str = "",
+) -> tuple[str, bool]:
+    """Assemble a chapter from per-tick author_final texts.
+
+    Returns (markdown, edited) where edited=True means LLM editorial pass succeeded.
+    """
+    if not tick_texts:
+        return f"# {ch.title}", False
+
+    # Try LLM editorial pass
+    if llm:
+        edited = _edit_chapter_llm(ch, tick_texts, llm, reflection_block)
+        if edited:
+            body = _strip_leading_title(edited, ch.title)
+            return f"# {ch.title}\n\n{body}", True
+
+    # Fallback: direct concatenation
+    parts: list[str] = [f"# {ch.title}"]
+    for _tick, text in tick_texts:
+        parts.append("")
+        parts.append(_strip_leading_title(text, ch.title))
+    return "\n".join(parts), False
+
+
+def _edit_chapter_llm(
+    ch: ChapterSlice,
+    tick_texts: list[tuple[int, str]],
+    llm: LLMProvider,
+    reflection_block: str = "",
+) -> Optional[str]:
+    """LLM editorial pass: reshape tick fragments into a cohesive chapter."""
+    segments = []
+    for i, (tick, text) in enumerate(tick_texts):
+        segments.append(f"--- 片段 {i+1}（tick {tick}）---\n{text}")
+
+    total_chars = sum(len(t) for _, t in tick_texts)
+    user_parts = []
+    if reflection_block:
+        user_parts.append(reflection_block)
+    user_parts.append(
+        f"章节标题：{ch.title}\n\n"
+        f"以下是本章 {len(tick_texts)} 个片段的原始定稿（共约 {total_chars} 字），"
+        f"请编辑为一个连贯的章节：\n\n"
+        + "\n\n".join(segments)
+    )
+    user_prompt = "\n\n".join(user_parts)
+    max_tokens = max(8192, int(total_chars * 1.3))
+    try:
+        resp = llm.chat(
+            system=CHAPTER_EDIT_SYSTEM,
+            messages=[Message(role="user", content=user_prompt)],
+            tools=[],
+            max_tokens=max_tokens,
+            temperature=0.4,
+        )
+        text = (resp.text or "").strip()
+        if not text:
+            return None
+        if not text.startswith("#"):
+            text = f"# {ch.title}\n\n{text}"
+        return text
+    except Exception as e:
+        log.warning("chapter edit failed for chapter %d: %s", ch.index, e)
+        return None
 
 
 def _frontmatter(world: World, branch: Branch) -> str:
@@ -262,124 +404,3 @@ def _frontmatter(world: World, branch: Branch) -> str:
         + (f"tone: {tone}\n" if tone else "")
         + "---\n"
     )
-
-
-def _cast_for_chapter(events: list[Event], entities_by_id: dict[str, Entity]) -> list[Entity]:
-    """Distinct entities involved in this chapter (participants + locations)."""
-    seen: set[str] = set()
-    cast: list[Entity] = []
-    for ev in events:
-        for pid in (ev.participants or []):
-            if pid in entities_by_id and pid not in seen:
-                seen.add(pid)
-                cast.append(entities_by_id[pid])
-        if ev.location_id and ev.location_id in entities_by_id and ev.location_id not in seen:
-            seen.add(ev.location_id)
-            cast.append(entities_by_id[ev.location_id])
-    return cast
-
-
-def _render_chapter(world: World, branch: Branch, ch: ChapterSlice,
-                    events: list[Event], cast: list[Entity],
-                    prev_tail: str, llm: Optional[LLMProvider]) -> str:
-    if llm is None:
-        return _render_chapter_fallback(ch, events, cast)
-
-    user_prompt = _build_chapter_prompt(world, branch, ch, events, cast, prev_tail)
-    resp = llm.chat(
-        system=SYSTEM_PROMPT,
-        messages=[Message(role="user", content=user_prompt)],
-        tools=[],
-        max_tokens=CHAPTER_MAX_TOKENS,
-        temperature=0.7,
-    )
-    text = (resp.text or "").strip()
-    if not text:
-        return _render_chapter_fallback(ch, events, cast)
-    if not text.startswith("#"):
-        text = f"# {ch.title}\n\n{text}"
-    return text
-
-
-def _build_chapter_prompt(world: World, branch: Branch, ch: ChapterSlice,
-                          events: list[Event], cast: list[Entity],
-                          prev_tail: str) -> str:
-    parts = [
-        f"## 章节：{ch.title}（tick {ch.tick_lo}–{ch.tick_hi}，共 {len(events)} 事件）",
-        f"## 世界  {world.name} · 分支 {branch.name}",
-        f"{world.description or ''}",
-    ]
-    rules = world.rules or {}
-    if rules.get("tone"):
-        parts.append(f"\n叙事基调：{rules['tone']}")
-    if rules.get("language"):
-        parts.append(f"语言风格：{rules['language']}")
-
-    parts.append("\n## 出场人物（请贴合每个人的 voice 写台词）")
-    cast_lines = []
-    for e in cast:
-        if e.type == "location":
-            line = f"- 【地】{e.name}"
-            if e.summary:
-                line += f" — {e.summary}"
-        else:
-            persona = e.persona or {}
-            voice = persona.get("voice") or ""
-            drives = persona.get("drives") or []
-            line = f"- {e.name}"
-            if e.summary:
-                line += f"（{e.summary}）"
-            if voice:
-                line += f"  语气：{voice}"
-            if drives:
-                line += f"  驱动：{','.join(drives)}"
-        cast_lines.append(line)
-    parts.append("\n".join(cast_lines) if cast_lines else "（无）")
-
-    parts.append("\n## 必须改写的事件（按时间顺序，全都要在章节里出现）")
-    for ev in events:
-        ev_line = f"- t={ev.tick} 《{ev.title}》"
-        if ev.description:
-            ev_line += f"：{ev.description}"
-        if ev.participants:
-            names = []
-            for pid in ev.participants:
-                ent = next((c for c in cast if c.id == pid), None)
-                if ent:
-                    names.append(ent.name)
-            if names:
-                ev_line += f"  [参与：{', '.join(names)}]"
-        if ev.consequences:
-            ev_line += f"  [后果：{'; '.join(ev.consequences)}]"
-        parts.append(ev_line)
-
-    if prev_tail:
-        parts.append("\n## 上一章尾段（仅供你保持笔触连贯，不要重复写出）")
-        parts.append(prev_tail)
-
-    parts.append(
-        "\n现在请把上述事件改写成本章正文。开头是 `# " + ch.title + "`，"
-        "正文要让事件自然地依次发生，不要列编号，不要做章末总结。"
-    )
-    return "\n".join(parts)
-
-
-def _render_chapter_fallback(ch: ChapterSlice, events: list[Event],
-                             cast: list[Entity], *, error: str = "") -> str:
-    """No-LLM rendering: list events as plain prose blocks."""
-    lines = [f"# {ch.title}", ""]
-    if error:
-        lines.append(f"> （LLM 调用失败，使用模板渲染：{error}）")
-        lines.append("")
-    name_by_id = {e.id: e.name for e in cast}
-    for ev in events:
-        lines.append(f"**t{ev.tick} · {ev.title}**")
-        if ev.description:
-            lines.append(ev.description)
-        if ev.participants:
-            who = "、".join(name_by_id.get(p, p) for p in ev.participants)
-            lines.append(f"*出场：{who}*")
-        if ev.consequences:
-            lines.append("*后果：* " + "；".join(ev.consequences))
-        lines.append("")
-    return "\n".join(lines)

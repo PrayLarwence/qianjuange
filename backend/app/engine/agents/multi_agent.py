@@ -238,7 +238,7 @@ def pick_focal_characters(db: Session, world: World, limit: int = 4) -> list[str
         last = mems[-1]
         return int(last.get("tick") or 0)
 
-    chars.sort(key=lambda e: (recency(e), e.target_x is not None), reverse=True)
+    chars.sort(key=lambda e: recency(e), reverse=True)
     return [e.id for e in chars[:limit]]
 
 

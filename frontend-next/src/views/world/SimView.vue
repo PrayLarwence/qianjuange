@@ -49,6 +49,7 @@ watch(worldId, () => { resetRunState(); loadWorld(); });
 const directive = ref('');
 const stepCount = ref(1);
 const selectedCharIds = ref<Set<string>>(new Set());
+const expertMode = ref(false);
 
 function toggleChar(id: string) {
   const next = new Set(selectedCharIds.value);
@@ -210,7 +211,11 @@ async function runSingle() {
             if (j.status === 'completed') {
               lastResult.value = j.result as StepResult || null;
               if ((j.result as any)?.narration) liveNarration.value = (j.result as any).narration;
-              await refreshAfterRun(lastResult.value || undefined);
+              try {
+                await refreshAfterRun(lastResult.value || undefined);
+              } catch (refreshErr: any) {
+                console.warn('refreshAfterRun failed:', refreshErr);
+              }
               checkConsistency();
               const verdict = (j.result as any)?.final_verdict;
               const rounds = j.result?.critic_rounds || 0;
@@ -267,6 +272,39 @@ async function runAuto() {
   currentMode.value = 'auto';
   runStartedTick.value = world.value?.current_tick ?? 0;
   phaseMessage.value = '排队中…';
+
+  if (useOrchestrated.value) {
+    // 编排模式：逐步调用 step_orchestrated
+    try {
+      for (let i = 0; i < steps; i++) {
+        if (!running.value) break;
+        phaseMessage.value = `编排推演 ${i + 1}/${steps}…`;
+        const { job_id } = await agentPipelineApi.startStep(worldId.value, {
+          directive: directive.value.trim() || undefined,
+        });
+        const finalJob = await stream.poll(job_id);
+        lastResult.value = (finalJob.result as StepResult) || null;
+        if (finalJob.narration) liveNarration.value = finalJob.narration;
+        await refreshAfterRun(lastResult.value || undefined);
+      }
+      checkConsistency();
+      toast.success(`编排推演完成 ${steps} 步`);
+    } catch (e: any) {
+      runError.value = e.message || String(e);
+      if (String(runError.value).includes('cancelled')) {
+        toast.info('已取消');
+        await refreshAfterRun();
+      } else {
+        toast.error(`编排推演失败：${runError.value}`);
+      }
+    } finally {
+      running.value = false;
+      stream.reset();
+    }
+    return;
+  }
+
+  // 旧管线：step_async
   try {
     const { job_id } = await simApi.stepAsync(worldId.value, {
       steps,
@@ -413,7 +451,12 @@ function toolArgPreview(c: JobToolCall): string {
                       rows="3"
                       placeholder="可选：让张三在酒馆撞见李四的妻子…&#10;留空则让 AI 自由发挥" />
             <p class="text-xs text-muted mt-1.5 leading-relaxed">
-              指令越具体，结果越可控。每步会先存一个快照，可在「世界设置 / 分支」回滚。
+              <template v-if="expertMode">
+                指令越具体，结果越可控。每步会先存一个快照，可在「世界设置 / 分支」回滚。
+              </template>
+              <template v-else>
+                留空则 AI 自由发挥。
+              </template>
             </p>
           </section>
 
@@ -437,7 +480,7 @@ function toolArgPreview(c: JobToolCall): string {
           </section>
 
           <!-- 角色选择（多角色模式用） -->
-          <section v-if="characters.length > 0">
+          <section v-if="expertMode && characters.length > 0">
             <div class="flex items-center justify-between mb-2">
               <p class="text-muted text-xs uppercase tracking-wider">焦点角色（多角色模式）</p>
               <button v-if="selectedCharIds.size > 0"
@@ -459,7 +502,7 @@ function toolArgPreview(c: JobToolCall): string {
 
           <!-- 操作按钮 -->
           <section class="space-y-2 pt-2 border-t border-border">
-            <div class="flex items-center justify-between text-xs mb-1">
+            <div v-if="expertMode" class="flex items-center justify-between text-xs mb-1">
               <span class="text-muted">编排模式</span>
               <button class="px-2 py-0.5 rounded text-xs transition-colors"
                       :class="useOrchestrated ? 'bg-accent text-white' : 'bg-sunken text-muted'"
@@ -471,9 +514,10 @@ function toolArgPreview(c: JobToolCall): string {
                     :disabled="!canRun"
                     @click="runSingle">
               <span v-if="running && currentMode === 'single'">推演中…</span>
-              <span v-else>↻ 推演 1 步</span>
+              <span v-else>{{ expertMode ? '↻ 推演 1 步' : '继续写' }}</span>
             </button>
 
+            <template v-if="expertMode">
             <div class="flex gap-2">
               <input v-model.number="stepCount" type="number" min="1" max="20"
                      class="input !w-20 text-center"
@@ -495,11 +539,19 @@ function toolArgPreview(c: JobToolCall): string {
                 <span v-if="selectedCharIds.size > 0" class="text-muted">（{{ selectedCharIds.size }}）</span>
               </span>
             </button>
+            </template>
           </section>
 
           <p v-if="reachedMax" class="text-xs text-muted text-center">
             已达推演上限。可在「世界设置」里调整 max_tick。
           </p>
+
+          <div class="pt-3 border-t border-border text-center">
+            <button class="text-xs text-muted hover:text-accent transition-colors"
+                    @click="expertMode = !expertMode">
+              {{ expertMode ? '切换到简洁模式' : '显示专家选项' }}
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -511,18 +563,28 @@ function toolArgPreview(c: JobToolCall): string {
           <template v-if="(world?.current_tick ?? 0) === 0">
             <p class="font-serif text-2xl mb-3">这个世界还没有事件</p>
             <p class="text-muted leading-relaxed mb-4">
-              如果你从手稿导入，先去
-              <router-link :to="`/worlds/${worldId}/settings`" class="text-accent underline">世界设置</router-link>
-              抽取事件草稿并审阅落库，然后再来推演。
+              <template v-if="expertMode">
+                如果你从手稿导入，先去
+                <router-link :to="`/worlds/${worldId}/settings`" class="text-accent underline">世界设置</router-link>
+                抽取事件草稿并审阅落库，然后再来推演。
+              </template>
+              <template v-else>
+                在左边写一句话描述接下来要发生什么，然后点「继续写」。留空也行，AI 会自由发挥。
+              </template>
             </p>
           </template>
           <template v-else>
             <p class="font-serif text-2xl mb-3">让故事往前走一点</p>
             <p class="text-muted leading-relaxed mb-6">
-              输入一个具体指令，或者直接点「推演 1 步」让 AI 自由接龙。<br />
-              想要更多角色视角时用「多角色推演」。
+              <template v-if="expertMode">
+                输入一个具体指令，或者直接点「推演 1 步」让 AI 自由接龙。<br />
+                想要更多角色视角时用「多角色推演」。
+              </template>
+              <template v-else>
+                写一句话描述下一步走向，或者直接点「继续写」。
+              </template>
             </p>
-            <div class="text-xs text-muted space-y-1.5">
+            <div v-if="expertMode" class="text-xs text-muted space-y-1.5">
               <div><span class="font-mono text-text">↻ 1 步</span> — 同步执行，秒回</div>
               <div><span class="font-mono text-text">⏵ 自动 N 步</span> — 后台跑，可取消</div>
               <div><span class="font-mono text-text">☻ 多角色</span> — 每个焦点角色出意图，再合并</div>
@@ -533,10 +595,15 @@ function toolArgPreview(c: JobToolCall): string {
              class="max-w-2xl mx-auto pt-20 text-center">
           <p class="font-serif text-2xl mb-3">让故事往前走一点</p>
           <p class="text-muted leading-relaxed mb-6">
-            输入一个具体指令，或者直接点「推演 1 步」让 AI 自由接龙。<br />
-            想要更多角色视角时用「多角色推演」。
+            <template v-if="expertMode">
+              输入一个具体指令，或者直接点「推演 1 步」让 AI 自由接龙。<br />
+              想要更多角色视角时用「多角色推演」。
+            </template>
+            <template v-else>
+              写一句话描述下一步走向，或者直接点「继续写」。
+            </template>
           </p>
-          <div class="text-xs text-muted space-y-1.5">
+          <div v-if="expertMode" class="text-xs text-muted space-y-1.5">
             <div><span class="font-mono text-text">↻ 1 步</span> — 同步执行，秒回</div>
             <div><span class="font-mono text-text">⏵ 自动 N 步</span> — 后台跑，可取消</div>
             <div><span class="font-mono text-text">☻ 多角色</span> — 每个焦点角色出意图，再合并</div>

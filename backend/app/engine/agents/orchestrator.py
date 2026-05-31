@@ -21,13 +21,49 @@ from typing import Callable, Optional
 from sqlalchemy.orm import Session
 
 from ...models import World, NarrativeLog, AgentTrace
-from ...providers import get_provider
+from ...providers import get_provider, get_provider_for_role
 from ...providers.base import LLMProvider, Message
-from .agent_pipeline import PipelineConfig, CriticAgent, resolve_for_world
+from .agent_pipeline import PipelineConfig, CriticAgent, AuthorAgent, resolve_for_world
 from ..core.executor import active_branch_id
 from ..core.simulator import run_step as sim_run_step, _is_mock as sim_is_mock
 
 log = logging.getLogger(__name__)
+
+
+def _resolve_author_provider(
+    world: World,
+    author_cfg: AuthorAgent,
+    fallback: Optional[LLMProvider] = None,
+) -> LLMProvider:
+    """Resolve LLM provider for an author agent.
+
+    Priority: AuthorAgent.model (from pipeline config) > world.author_model_override > global default.
+    """
+    model_spec = (author_cfg.model or "").strip()
+    if model_spec:
+        # Reuse the same resolution logic as get_provider_for_role but with the config value
+        from ...providers import load_config, PROVIDER_CLASSES
+        if ":" in model_spec:
+            provider_name, model_name = model_spec.split(":", 1)
+            provider_name = provider_name.strip().lower()
+            model_name = model_name.strip()
+        else:
+            provider_name = (load_config().get("active") or "claude").lower()
+            model_name = model_spec
+        cls = PROVIDER_CLASSES.get(provider_name)
+        if cls:
+            cfg = load_config()
+            p = cfg["providers"].get(provider_name, {})
+            kwargs: dict = {"model": model_name} if model_name else {}
+            if p.get("api_key"):
+                kwargs["api_key"] = p["api_key"]
+            if p.get("base_url"):
+                kwargs["base_url"] = p["base_url"]
+            if not getattr(cls, "needs_api_key", True):
+                kwargs.pop("api_key", None)
+            return cls(**kwargs)
+    # Fall back to world-level override or global
+    return fallback or get_provider_for_role(world, "author")
 
 
 class BudgetExhausted(Exception):
@@ -135,12 +171,15 @@ def _build_critic_user_prompt(
     directive: Optional[str],
     previous_round: Optional[dict] = None,
     arc_context: Optional[str] = None,
+    reflection_block: str = "",
 ) -> str:
     parts = []
     if directive:
         parts.append(f"# 用户本回合指令\n{directive}")
     parts.append(f"# 你的关注点（focus）\n{critic.focus or '（无特别关注，请整体把关）'}")
     parts.append(f"# 严格度\n{critic.severity}")
+    if reflection_block:
+        parts.append(reflection_block)
     if critic.kind == "arc" and arc_context and arc_context.strip():
         parts.append(
             "# 前文章节回顾（按时间顺序，主线发展）\n"
@@ -215,6 +254,19 @@ def _parse_critic_response(text: str) -> dict:
     }
 
 
+_SEVERITY_THRESHOLDS = {"lenient": 4, "normal": 6, "strict": 7}
+
+
+def _enforce_severity(parsed: dict, severity: str) -> dict:
+    """如果 score 高于 severity 阈值但 LLM 给了 fail，强制改为 pass。"""
+    threshold = _SEVERITY_THRESHOLDS.get(severity, 6)
+    score = parsed.get("score", 5)
+    if parsed["verdict"] == "fail" and score > threshold:
+        parsed["verdict"] = "pass"
+        parsed["reason"] = f"(score {score} > {severity} threshold {threshold}, auto-pass) " + parsed.get("reason", "")
+    return parsed
+
+
 def _run_one_critic(
     db: Session,
     job_id: str,
@@ -235,30 +287,45 @@ def _run_one_critic(
         raise CancelledError()
     budget.check()
 
-    user_prompt = _build_critic_user_prompt(critic, final_text, directive, previous_round, arc_context)
+    from ..reflection import build_reflection_block
+    refl_block = build_reflection_block(db, world.id, "critic")
+    user_prompt = _build_critic_user_prompt(critic, final_text, directive, previous_round, arc_context, refl_block)
     started = datetime.utcnow()
     t0 = time.monotonic()
     err_msg = ""
     resp_text = ""
     parsed = {"verdict": "pass", "score": 5, "reason": "(skipped)", "suggestions": ""}
     status = "done"
-    try:
-        budget.add_call()
-        resp = provider.chat(
-            system=CRITIC_SYSTEM_PROMPT,
-            messages=[Message(role="user", content=user_prompt)],
-            tools=[],
-            max_tokens=512,
-            temperature=0.3,
-        )
-        resp_text = resp.text or ""
-        parsed = _parse_critic_response(resp_text)
-    except Exception as e:
-        log.exception("critic %s failed", critic.name)
-        err_msg = f"{type(e).__name__}: {e}"
-        status = "error"
-        # critic 自己崩溃不应该阻挡定稿；当作 pass 让流程继续
-        parsed = {"verdict": "pass", "score": 5, "reason": f"(critic crashed: {err_msg[:80]})", "suggestions": ""}
+    retried = False
+
+    for attempt in range(2):
+        try:
+            budget.add_call()
+            resp = provider.chat(
+                system=CRITIC_SYSTEM_PROMPT,
+                messages=[Message(role="user", content=user_prompt)],
+                tools=[],
+                max_tokens=512,
+                temperature=0.3,
+            )
+            resp_text = resp.text or ""
+            parsed = _parse_critic_response(resp_text)
+            if "unparseable" in parsed.get("reason", "") and attempt == 0:
+                retried = True
+                log.warning("critic %s response unparseable, retrying", critic.name)
+                continue
+            break
+        except Exception as e:
+            log.exception("critic %s failed (attempt %d)", critic.name, attempt + 1)
+            err_msg = f"{type(e).__name__}: {e}"
+            if attempt == 0:
+                retried = True
+                continue
+            status = "error"
+            parsed = {"verdict": "pass", "score": 5, "reason": f"(critic crashed: {err_msg[:80]})", "suggestions": ""}
+            break
+
+    parsed = _enforce_severity(parsed, critic.severity)
 
     duration_ms = int((time.monotonic() - t0) * 1000)
     tr = _write_trace(
@@ -282,6 +349,7 @@ def _run_one_critic(
             "duration_ms": duration_ms,
             "severity": critic.severity,
             "error": err_msg or None,
+            "retried": retried,
             "prev_round_used": bool(previous_round),
             "kind": critic.kind,
             "arc_context_used": bool(arc_context and arc_context.strip()) if critic.kind == "arc" else False,
@@ -333,7 +401,15 @@ def _author_rewrite(
         for c in critic_feedback
     )
 
-    sys_prompt = "你是小说作者。你会拿到一段已经写好的章节正文，和审稿人的反馈。请按反馈修改，输出修改后的完整正文（仅正文，不要解释）。保持原长度量级，不要过度删减。"
+    from .author import _resolve_style, _default_style
+    style = _resolve_style(db, world) or _default_style()
+
+    sys_prompt = f"""你是小说作者。你会拿到一段已经写好的章节正文，和审稿人的反馈。请按反馈修改，输出修改后的完整正文（仅正文，不要解释）。保持原长度量级，不要过度删减。
+
+# 风格规范
+{style.spec_text or '(无 spec)'}
+
+改写时保持原有文笔质感，不要引入 AI 腔。"""
     user_prompt = f"# 原文\n{original_text}\n\n# 审稿反馈\n{feedback_str}\n\n# 修改后正文（仅正文）"
 
     started = datetime.utcnow()
@@ -348,12 +424,18 @@ def _author_rewrite(
             system=sys_prompt,
             messages=[Message(role="user", content=user_prompt)],
             tools=[],
-            max_tokens=4096,
+            max_tokens=max(8192, int(len(original_text) * 1.5)),
             temperature=0.7,
+            timeout=120.0,
         )
         resp_text = resp.text or ""
         if resp_text.strip():
             new_text = resp_text.strip()
+            from .style_lint import lint_text
+            lint_r = lint_text(new_text)
+            if not lint_r.passed:
+                log.warning("author rewrite still has lint issues (score=%d): %s",
+                            lint_r.score, "; ".join(v.detail for v in lint_r.violations[:3]))
             if final is not None:
                 final.text = new_text
                 final.revision_index = (final.revision_index or 0) + 1
@@ -459,10 +541,6 @@ def _best_of_k_author_phase(
         prepare_author_inputs, call_author_llm_once,
         write_author_final, write_author_fallback,
     )
-    from ..core.simulator import _resolve_provider as _sim_resolve_provider
-    llm = provider or _sim_resolve_provider(world)
-    if llm is None:
-        return None
 
     prep, early = prepare_author_inputs(db, world, branch_id, start_tick)
     if early is not None or prep is None:
@@ -477,16 +555,17 @@ def _best_of_k_author_phase(
             raise CancelledError()
         try:
             budget.check()
-            budget.add_call()
         except BudgetExhausted:
             log.info("budget exhausted at candidate %d/%d", i, len(specs))
             break
         a_cfg = spec["author_cfg"]
-        text, reason = call_author_llm_once(
-            llm, prep,
+        a_llm = _resolve_author_provider(world, a_cfg, fallback=provider)
+        text, reason, n_calls = call_author_llm_once(
+            a_llm, prep,
             temperature=spec["temperature"],
             system_prompt_extra=a_cfg.system_prompt_extra,
         )
+        budget.calls += n_calls
         candidates.append({
             "idx": i, "author_idx": spec["author_idx"],
             "temperature": spec["temperature"],
@@ -521,6 +600,8 @@ def _best_of_k_author_phase(
         }
 
     # 给每个候选跑全套 critic（ranking phase, iteration=0 但 extra.is_ranking=True）
+    from ..core.simulator import _resolve_provider
+    critic_llm = provider if provider is not None else _resolve_provider(None)
     candidate_critic_results: list[dict] = []  # 每项: {idx, scores, all_pass, failed_feedback, results: dict[name→parsed]}
     for cand in valid:
         per: dict = {"idx": cand["idx"], "results": {}, "scores": [],
@@ -533,7 +614,7 @@ def _best_of_k_author_phase(
             try:
                 parsed, _ = _run_one_critic(
                     db, job_id, world, seq, 0, c,
-                    cand["text"], None, llm, budget, cancel_check,
+                    cand["text"], None, critic_llm, budget, cancel_check,
                     previous_round=None,
                     arc_context=arc_context if c.kind == "arc" else None,
                 )
@@ -581,6 +662,15 @@ def _best_of_k_author_phase(
         winner_results = winner_summary["results"]
         winner_all_pass = bool(winner_summary.get("all_pass"))
         winner_feedback = list(winner_summary.get("failed_feedback") or [])
+
+    from .style_lint import lint_text, format_lint_feedback
+    lint_result = lint_text(winner_text)
+    if not lint_result.passed:
+        log.info("style_lint failed on best-of-K winner (score=%d), triggering revision", lint_result.score)
+        from .author import _revise_with_feedback
+        revised = _revise_with_feedback(provider, winner_text, format_lint_feedback(lint_result), prep)
+        if revised:
+            winner_text = revised
 
     final = write_author_final(db, prep, winner_text)
 
@@ -666,6 +756,13 @@ def run_orchestrated_step(
     sim_result: dict
     try:
         budget.check()
+        # 如果 Reader 已有 brief，用精简上下文；否则用完整快照
+        has_brief = False
+        try:
+            from .reader import get_current_brief
+            has_brief = bool(get_current_brief(db, world))
+        except Exception:
+            pass
         sim_result = sim_run_step(
             db, world,
             user_directive=user_directive,
@@ -673,6 +770,7 @@ def run_orchestrated_step(
             cancel_check=cancel_check,
             on_progress=on_progress,
             skip_author=True,
+            use_slim_context=has_brief,
         )
         # director phase 的 LLM 调用次数 ≈ hops。一次保守加 hops
         budget.calls += int(sim_result.get("hops", 1))
@@ -733,6 +831,18 @@ def run_orchestrated_step(
             extra={"skipped_reason": "multi_director_not_yet_supported"},
         )
 
+    # ----- lore sync: extract implicit world-building from Director output -----
+    try:
+        from .lore_sync import extract_lore_from_step
+        lore_provider = provider or get_provider()
+        extracted_lore = extract_lore_from_step(
+            db, world, branch_id, world.current_tick, lore_provider,
+        )
+        if extracted_lore:
+            log.info("lore_sync: auto-extracted %d entries", len(extracted_lore))
+    except Exception as e:
+        log.warning("lore_sync failed (non-fatal): %s", e)
+
     # ----- author phase -----
     primary_author = cfg.authors[0]
     final_text = ""
@@ -785,10 +895,13 @@ def run_orchestrated_step(
         seq += 1
         author_started = datetime.utcnow()
         author_t0 = time.monotonic()
+        author_llm_calls = 0
+        author_fell_back = False
         try:
             from .author import run_author_for_step
             from ..narrative.draft_cleanup import cleanup_old_drafts
-            ar = run_author_for_step(db, world, branch_id, start_tick, provider=provider)
+            author_llm = _resolve_author_provider(world, primary_author, fallback=provider)
+            ar = run_author_for_step(db, world, branch_id, start_tick, provider=author_llm)
             if ar.ok and ar.log_id:
                 author_log_id = ar.log_id
                 final_text = ar.text or ""
@@ -797,9 +910,11 @@ def run_orchestrated_step(
             else:
                 final_text = ar.text or ""
             cleanup_old_drafts(db, branch_id)
-            budget.calls += 0 if ar.fell_back else 1
+            budget.calls += ar.llm_calls
             author_status = "done"
             author_err = ""
+            author_llm_calls = ar.llm_calls
+            author_fell_back = ar.fell_back
         except Exception as e:
             log.exception("author phase crashed")
             author_status = "error"
@@ -831,6 +946,8 @@ def run_orchestrated_step(
                 "duration_ms": int((time.monotonic() - author_t0) * 1000),
                 "log_id": author_log_id,
                 "char_count": len(final_text),
+                "llm_calls": author_llm_calls,
+                "fell_back": author_fell_back,
                 "error": author_err if author_status == "error" else None,
             },
             started_at=author_started, ended_at=datetime.utcnow(),
@@ -974,9 +1091,66 @@ def run_orchestrated_step(
                             output_summary=f"达到重试上限，强制接受当前定稿（仍有 {len(feedback)} 个 critic 反对）",
                             extra={"feedback": feedback, "is_forced_accept": True},
                         )
+                        # 将未解决的 critic 反馈写入反思记忆，供下一轮 author 参考
+                        import uuid as _uuid
+                        from app.models import ReflectionMemory
+                        for fb in feedback:
+                            title = f"[自动] critic {fb.get('name','')} 未解决: {fb.get('reason','')[:40]}"
+                            content = f"建议: {fb.get('suggestions','')}"
+                            row = ReflectionMemory(
+                                id=f"refl_{_uuid.uuid4().hex[:10]}",
+                                world_id=world.id,
+                                agent_type="author",
+                                title=title[:200],
+                                content=content[:4000],
+                                enabled=1,
+                                source_tick=world.current_tick,
+                                source_event="forced_accept",
+                            )
+                            db.add(row)
                         break
 
     progress({"phase": "orchestrator_done", "verdict": final_verdict, "rounds": critic_rounds})
+
+    # ----- Reader review: 验证 + 更新状态 + 产出下一章 brief -----
+    reader_result = {"passed": True, "issues": [], "brief": "", "llm_calls": 0}
+    if final_text and final_verdict in ("pass", "no_critics", "forced_accept"):
+        try:
+            from .reader import run_reader_review, run_patch
+            progress({"phase": "reader_review"})
+            reader_result = run_reader_review(
+                db, world, final_text,
+                chapter_number=world.current_tick,
+                provider=None,
+            )
+            budget.calls += reader_result.get("llm_calls", 0)
+
+            # 定点修补：Reader 不通过时修问题段落
+            if not reader_result.get("passed") and reader_result.get("issues"):
+                progress({"phase": "reader_patch", "issues": len(reader_result["issues"])})
+                patch_result = run_patch(db, world, final_text, reader_result["issues"])
+                budget.calls += patch_result.get("llm_calls", 0)
+                if patch_result.get("patched"):
+                    final_text = patch_result["text"]
+                    # 更新 NarrativeLog 中的 author_final
+                    branch_id = world.active_branch_id
+                    last_nar = (
+                        db.query(NarrativeLog)
+                        .filter(
+                            NarrativeLog.branch_id == branch_id,
+                            NarrativeLog.role == "author_final",
+                            NarrativeLog.tick == world.current_tick,
+                        )
+                        .order_by(NarrativeLog.created_at.desc())
+                        .first()
+                    )
+                    if last_nar:
+                        last_nar.text = final_text
+                    reader_result["patched"] = True
+
+            db.commit()
+        except Exception as e:
+            log.warning("reader review failed (non-fatal): %s", e)
 
     return {
         "ok": True,
@@ -988,6 +1162,8 @@ def run_orchestrated_step(
         "critic_rounds": critic_rounds,
         "final_verdict": final_verdict,
         "unresolved_critics": unresolved_feedback,
+        "reader_passed": reader_result.get("passed", True),
+        "reader_issues": reader_result.get("issues", []),
         "budget_used": {
             "llm_calls": budget.calls,
             "wall_seconds": int(time.monotonic() - budget.start),

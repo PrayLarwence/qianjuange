@@ -114,6 +114,85 @@ def _build_self_correction_block(db: Session, world: World) -> str:
     return "\n".join(lines)
 
 
+def _build_slim_user_prompt(db: Session, slim_text: str, user_directive: Optional[str], world: World) -> str:
+    """用 Reader brief 构建精简 user prompt（替代 state_as_prompt 的巨型 JSON）。"""
+    parts = [slim_text]
+    rules_text = render_world_rules(world.rules or {})
+    if rules_text:
+        parts.append("\n# 世界规则（强约束）\n" + rules_text)
+    from ..reflection import build_reflection_block
+    refl = build_reflection_block(db, world.id, "director")
+    if refl:
+        parts.append("\n" + refl)
+    from ..agents.author import _resolve_style
+    _style = _resolve_style(db, world)
+    if _style and getattr(_style, "sample_paragraphs", None):
+        samples = _style.sample_paragraphs
+        if isinstance(samples, list) and samples:
+            sp_lines = ["# 范文参考（模仿这些文字的质感，不要模仿内容）"]
+            for sp in samples[:3]:
+                if isinstance(sp, dict):
+                    sp_lines.append(f"## {sp.get('title', '范文')}\n{sp.get('text', '')}")
+                elif isinstance(sp, str):
+                    sp_lines.append(sp)
+            parts.append("\n" + "\n\n".join(sp_lines))
+    if user_directive and user_directive.strip():
+        parts.append(f"\n# 用户指令\n{user_directive.strip()}")
+    parts.append(
+        "\n# 任务\n"
+        "请基于上述状态推演下一段世界发展。通过工具调用改变状态："
+        " advance_time 推进时间、add_event 记录事件、update_entity 更新角色，"
+        " link_causality 建立因果，narrate 写一段散文（可选），最后必须 end_turn。"
+    )
+    return "\n".join(parts)
+
+
+def _build_cast_expansion_hint(snapshot: dict, world: World) -> str:
+    """当角色数量相对 tick 过少、或长时间没有新角色时，返回提示文本。"""
+    entities = snapshot.get("entities", [])
+    characters = [e for e in entities if e.get("type") == "character"]
+    char_count = len(characters)
+    tick = world.current_tick or 0
+
+    if tick < 3:
+        return ""
+
+    # 计算距离上次创建角色过了多少 tick
+    last_created_tick = 0
+    for e in characters:
+        ct = e.get("created_at_tick", 0) or 0
+        if ct > last_created_tick:
+            last_created_tick = ct
+    ticks_since_new = tick - last_created_tick
+
+    # 角色数量配额：tick/3 个角色（下限 3）
+    expected = max(3, tick // 3)
+    too_few = char_count < expected
+
+    # 长时间没有新角色（超过 4 tick）
+    stale = ticks_since_new >= 4
+
+    if not too_few and not stale:
+        return ""
+
+    parts = ["\n# 角色扩展提示（强制）"]
+    if too_few:
+        parts.append(
+            f"当前已推演 {tick} 轮，但仅有 {char_count} 个角色（期望至少 {expected} 个）。"
+        )
+    if stale:
+        parts.append(
+            f"距离上次引入新角色已过 {ticks_since_new} 轮。"
+        )
+    parts.append(
+        "**本轮必须通过 create_entity 引入至少一个新角色**"
+        "（配角、对手、信使、路人、目击者皆可）。"
+        "为其填写完整的 summary 和 attributes（包含 drives、voice）。"
+        "不要强行让新角色与现有角色产生关联——让他们在自己的叙事线上自然发展。"
+    )
+    return "\n".join(parts)
+
+
 def _build_user_prompt(db: Session, snapshot: dict, user_directive: Optional[str], world: World) -> str:
     parts = [state_as_prompt(snapshot)]
     rules_text = render_world_rules(world.rules or {})
@@ -130,13 +209,34 @@ def _build_user_prompt(db: Session, snapshot: dict, user_directive: Optional[str
     feedback = _build_self_correction_block(db, world)
     if feedback:
         parts.append(feedback)
+    # 动态提示：角色太少时提醒引入新角色
+    cast_hint = _build_cast_expansion_hint(snapshot, world)
+    if cast_hint:
+        parts.append(cast_hint)
+    from ..reflection import build_reflection_block
+    refl = build_reflection_block(db, world.id, "director")
+    if refl:
+        parts.append("\n" + refl)
+    from ..agents.author import _resolve_style
+    _style = _resolve_style(db, world)
+    if _style and getattr(_style, "sample_paragraphs", None):
+        samples = _style.sample_paragraphs
+        if isinstance(samples, list) and samples:
+            sp_lines = ["# 范文参考（模仿这些文字的质感，不要模仿内容）"]
+            for sp in samples[:3]:
+                if isinstance(sp, dict):
+                    sp_lines.append(f"## {sp.get('title', '范文')}\n{sp.get('text', '')}")
+                elif isinstance(sp, str):
+                    sp_lines.append(sp)
+            parts.append("\n" + "\n\n".join(sp_lines))
     if user_directive and user_directive.strip():
         parts.append(f"\n# 用户指令\n{user_directive.strip()}")
     parts.append(
         "\n# 任务\n"
         "请基于上述状态推演下一段世界发展。通过工具调用改变状态："
-        " advance_time 推进时间、add_event 记录事件、update_entity 更新角色，"
-        " link_causality 建立因果，narrate 写一段散文（可选），最后必须 end_turn。"
+        " advance_time 推进时间、add_event 记录事件、create_entity 引入新角色/地点、update_entity 更新角色，"
+        " link_causality 建立因果，narrate 写一段散文（可选），"
+        "add_lore 固化新发明的世界设定（规则/地理/魔法等持久约束），最后必须 end_turn。"
     )
     return "\n".join(parts)
 
@@ -233,6 +333,57 @@ def _resolve_provider(provider: Optional[LLMProvider]) -> Optional[LLMProvider]:
     return get_provider()
 
 
+def _ensure_narration(db: Session, world: World, start_tick: int) -> None:
+    """If no narrator log exists for ticks covered in this step, synthesize one from events."""
+    bid = active_branch_id(world)
+    has_narration = (
+        db.query(NarrativeLog)
+        .filter(
+            NarrativeLog.branch_id == bid,
+            NarrativeLog.tick >= start_tick,
+            NarrativeLog.tick <= world.current_tick,
+            NarrativeLog.role == "narrator",
+        )
+        .first()
+    )
+    if has_narration:
+        return
+
+    events = (
+        db.query(Event)
+        .filter(
+            Event.branch_id == bid,
+            Event.tick >= start_tick,
+            Event.tick <= world.current_tick,
+        )
+        .order_by(Event.tick.asc(), Event.created_at.asc())
+        .limit(5)
+        .all()
+    )
+    if not events:
+        return
+
+    parts = []
+    for ev in events:
+        desc = ev.description or ev.title or ""
+        if desc:
+            parts.append(desc)
+
+    if not parts:
+        return
+
+    synth_text = "\n\n".join(parts)
+    from .executor import _new_id
+    nar = NarrativeLog(
+        id=_new_id("nar"),
+        branch_id=bid,
+        tick=start_tick,
+        role="narrator",
+        text=synth_text,
+    )
+    db.add(nar)
+
+
 def run_step(
     db: Session,
     world: World,
@@ -243,6 +394,7 @@ def run_step(
     step_index: int = 1,
     step_total: int = 1,
     skip_author: bool = False,
+    use_slim_context: bool = False,
 ) -> dict:
     """Run a single tool-using turn against the LLM.
 
@@ -262,8 +414,13 @@ def run_step(
         return _run_mock_step(db, world, user_directive)
 
     start_tick = world.current_tick
-    snapshot = build_state_snapshot(db, world)
-    user_prompt = _build_user_prompt(db, snapshot, user_directive, world)
+    if use_slim_context:
+        from ..agents.reader import build_slim_context
+        slim_text = build_slim_context(db, world)
+        user_prompt = _build_slim_user_prompt(db, slim_text, user_directive, world)
+    else:
+        snapshot = build_state_snapshot(db, world)
+        user_prompt = _build_user_prompt(db, snapshot, user_directive, world)
 
     messages: list[Message] = [Message(role="user", content=user_prompt)]
     tool_calls_log: list[dict] = []
@@ -357,6 +514,10 @@ def run_step(
             execute_tool(db, world, "advance_time", {"ticks": 1})
         except ToolError:
             pass
+
+    # Safety net: if no narration was produced for this step's ticks, synthesize
+    # a minimal one from the events so the narrative stream is never empty.
+    _ensure_narration(db, world, start_tick)
 
     db.commit()
 

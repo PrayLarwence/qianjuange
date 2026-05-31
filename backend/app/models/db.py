@@ -209,6 +209,59 @@ def _migrate() -> None:
                         pass
         except Exception:
             pass
+        # StyleProfile 加 negative_rules / builtin_source_id
+        try:
+            spcols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(style_profiles)").fetchall()}
+            if spcols and "negative_rules" not in spcols:
+                conn.exec_driver_sql("ALTER TABLE style_profiles ADD COLUMN negative_rules TEXT DEFAULT '[]'")
+            if spcols and "builtin_source_id" not in spcols:
+                conn.exec_driver_sql("ALTER TABLE style_profiles ADD COLUMN builtin_source_id VARCHAR")
+        except Exception:
+            pass
+        # ReflectionMemory 表
+        try:
+            conn.exec_driver_sql("""
+                CREATE TABLE IF NOT EXISTS reflection_memories (
+                    id VARCHAR PRIMARY KEY,
+                    world_id VARCHAR REFERENCES worlds(id),
+                    agent_type VARCHAR NOT NULL,
+                    title VARCHAR NOT NULL,
+                    content TEXT DEFAULT '',
+                    enabled INTEGER DEFAULT 1,
+                    source_tick INTEGER,
+                    source_event VARCHAR,
+                    created_at DATETIME,
+                    updated_at DATETIME
+                )
+            """)
+            conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_reflection_world_agent ON reflection_memories (world_id, agent_type)")
+        except Exception:
+            pass
+        # Migration: reflection_memories.world_id NOT NULL → nullable (全局反思)
+        try:
+            cols = conn.exec_driver_sql("PRAGMA table_info(reflection_memories)").fetchall()
+            world_col = next((c for c in cols if c[1] == "world_id"), None)
+            if world_col and world_col[3] == 1:  # notnull=1 → needs migration
+                conn.exec_driver_sql("""
+                    CREATE TABLE reflection_memories_new (
+                        id VARCHAR PRIMARY KEY,
+                        world_id VARCHAR REFERENCES worlds(id),
+                        agent_type VARCHAR NOT NULL,
+                        title VARCHAR NOT NULL,
+                        content TEXT DEFAULT '',
+                        enabled INTEGER DEFAULT 1,
+                        source_tick INTEGER,
+                        source_event VARCHAR,
+                        created_at DATETIME,
+                        updated_at DATETIME
+                    )
+                """)
+                conn.exec_driver_sql("INSERT INTO reflection_memories_new SELECT * FROM reflection_memories")
+                conn.exec_driver_sql("DROP TABLE reflection_memories")
+                conn.exec_driver_sql("ALTER TABLE reflection_memories_new RENAME TO reflection_memories")
+                conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_reflection_world_agent ON reflection_memories (world_id, agent_type)")
+        except Exception:
+            pass
 
 
 def get_db():

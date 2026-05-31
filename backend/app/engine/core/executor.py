@@ -1,8 +1,9 @@
 from __future__ import annotations
+import re
 import uuid
 from typing import Any
 from sqlalchemy.orm import Session
-from ...models import World, Branch, Entity, Event, CausalLink, NarrativeLog, PlotThread
+from ...models import World, Branch, Entity, Event, CausalLink, NarrativeLog, PlotThread, WorldLore
 
 
 def _new_id(prefix: str) -> str:
@@ -11,6 +12,14 @@ def _new_id(prefix: str) -> str:
 
 def active_branch_id(world: World) -> str:
     return getattr(world, "_override_branch_id", None) or world.active_branch_id
+
+
+_MD_HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+
+
+def _strip_markdown_headings(text: str) -> str:
+    """Remove markdown heading markers from narration text."""
+    return _MD_HEADING_RE.sub("", text)
 
 
 class ToolError(Exception):
@@ -43,12 +52,10 @@ def execute_tool(db: Session, world: World, name: str, args: dict[str, Any]) -> 
         return _open_plot_thread(db, world, branch_id, args)
     if name == "close_plot_thread":
         return _close_plot_thread(db, world, branch_id, args)
+    if name == "add_lore":
+        return _add_lore(db, world, args)
     if name == "end_turn":
         return {"ok": True, "ended": True}
-    if name == "set_position":
-        return _set_position(db, world, branch_id, args)
-    if name == "move_entity":
-        return _move_entity(db, world, branch_id, args)
     raise ToolError(f"unknown tool: {name}")
 
 
@@ -274,6 +281,7 @@ def _narrate(db: Session, branch_id: str, tick: int, args: dict[str, Any]) -> di
     text = args.get("text", "")
     if not text:
         raise ToolError("narrate: text required")
+    text = _strip_markdown_headings(text)
     log = NarrativeLog(id=_new_id("nar"), branch_id=branch_id, tick=tick, role="narrator", text=text)
     db.add(log)
     db.commit()
@@ -383,63 +391,38 @@ def _close_plot_thread(db: Session, world: World, branch_id: str, args: dict[str
     return {"ok": True, "closed": True, "id": th.id}
 
 
-def _load_map_or_raise(world: World):
-    from ..worldgen import worldgen
-    data = worldgen.load(world.id)
-    if data is None:
-        raise ToolError("no map for this world — generate one first")
-    return data
+LORE_CATEGORIES = {"setting", "magic", "taboo", "culture", "geography", "faction", "other"}
 
 
-def _set_position(db: Session, world: World, branch_id: str, args: dict[str, Any]) -> dict[str, Any]:
-    eid = args.get("id")
-    if not eid or "x" not in args or "y" not in args:
-        raise ToolError("set_position: id, x, y required")
-    map_data = _load_map_or_raise(world)
-    w, h = int(map_data["width"]), int(map_data["map_h"])
-    x, y = int(args["x"]), int(args["y"])
-    if not (0 <= x < w and 0 <= y < h):
-        raise ToolError(f"set_position: ({x},{y}) out of {w}x{h}")
-    entity = db.query(Entity).filter_by(id=eid, branch_id=branch_id).first()
-    if not entity:
-        raise ToolError(f"entity not found: {eid}")
-    entity.map_x = x
-    entity.map_y = y
-    entity.target_x = None
-    entity.target_y = None
-    ss = dict(entity.sim_state or {})
-    ss["status"] = "idle"
-    ss.pop("blocked_reason", None)
-    entity.sim_state = ss
-    db.commit()
-    return {"ok": True, "id": entity.id, "pos": [x, y]}
+def _add_lore(db: Session, world: World, args: dict[str, Any]) -> dict[str, Any]:
+    title = (args.get("title") or "").strip()
+    if not title:
+        raise ToolError("add_lore: title required")
+    content = (args.get("content") or "").strip()
+    if not content:
+        raise ToolError("add_lore: content required")
+    category = (args.get("category") or "setting").strip().lower()
+    if category not in LORE_CATEGORIES:
+        category = "setting"
 
-
-def _move_entity(db: Session, world: World, branch_id: str, args: dict[str, Any]) -> dict[str, Any]:
-    from ..map.map_sim import set_target
-    eid = args.get("id")
-    if not eid:
-        raise ToolError("move_entity: id required")
-    entity = db.query(Entity).filter_by(id=eid, branch_id=branch_id).first()
-    if not entity:
-        raise ToolError(f"entity not found: {eid}")
-
-    x, y = args.get("x"), args.get("y")
-    if x is None or y is None:
-        set_target(entity, None, None)
+    # Deduplicate: if a lore entry with the same title already exists, update it
+    existing = db.query(WorldLore).filter_by(world_id=world.id, title=title).first()
+    if existing:
+        existing.content = content[:8000]
+        existing.category = category
         db.commit()
-        return {"ok": True, "id": entity.id, "stopped": True}
+        return {"ok": True, "id": existing.id, "updated": True}
 
-    map_data = _load_map_or_raise(world)
-    w, h = int(map_data["width"]), int(map_data["map_h"])
-    if entity.map_x is None or entity.map_y is None:
-        raise ToolError(f"entity {eid} has no position — call set_position first")
-    xi, yi = int(x), int(y)
-    if not (0 <= xi < w and 0 <= yi < h):
-        raise ToolError(f"move_entity: ({xi},{yi}) out of {w}x{h}")
-    if "speed" in args and args["speed"] is not None:
-        entity.move_speed = max(0.1, float(args["speed"]))
-    set_target(entity, xi, yi)
+    row = WorldLore(
+        id=_new_id("lore"),
+        world_id=world.id,
+        category=category,
+        title=title[:200],
+        content=content[:8000],
+        priority=0,
+        pinned=0,
+    )
+    db.add(row)
     db.commit()
-    return {"ok": True, "id": entity.id, "from": [entity.map_x, entity.map_y], "to": [xi, yi]}
+    return {"ok": True, "id": row.id, "updated": False}
 

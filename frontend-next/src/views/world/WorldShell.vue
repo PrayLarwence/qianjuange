@@ -20,12 +20,12 @@ const items = [
   // 世界
   { to: 'cast',      label: '角色',   icon: '☻', group: '世界' },
   { to: 'lore',      label: '设定库', icon: '✦', group: '世界' },
+  { to: 'reflection',label: '反思',   icon: '◈', group: '世界' },
   { to: 'settings',  label: '设置',   icon: '⚙', group: '世界' },
   // 分析
   { to: 'review',    label: '审阅',   icon: '⊙', group: '分析' },
   { to: 'graph',     label: '图谱',   icon: '◇', group: '分析' },
   { to: 'timeline',  label: '时间轴', icon: '─', group: '分析' },
-  { to: 'map',       label: '地图',   icon: '◰', group: '分析' },
   { to: 'storyboard',label: '故事板', icon: '▦', group: '分析' },
 ];
 

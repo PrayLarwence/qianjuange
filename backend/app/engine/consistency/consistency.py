@@ -36,6 +36,7 @@ CATEGORY_LABELS = {
     "timeline": "时间线悖论",
     "relation": "关系冲突",
     "continuity": "场景连续性",
+    "prose": "文本质感",
     "other": "其它",
 }
 
@@ -43,18 +44,26 @@ SEVERITIES = {"high", "medium", "low"}
 CATEGORIES = set(CATEGORY_LABELS.keys())
 
 
-SYSTEM_PROMPT = """你是叙事一致性审稿人，负责发现故事中的连贯性问题。
+SYSTEM_PROMPT = """你是叙事一致性审稿人，负责发现故事中的连贯性问题和文本质感问题。
 
-# 扫描的五类矛盾
+# 扫描的六类问题
 1. personality（性格冲突）：同一角色前后行为/言谈风格出现明显矛盾，且无合理过渡
 2. ability（能力冲突）：前文设定不会某能力，后文未经训练突然精通
 3. rule（规则违反）：叙事踩了世界规则或禁忌列表
 4. timeline（时间线悖论）：已死亡角色出场、不在场角色干预、年龄/身份与时间不符
 5. relation（关系冲突）：角色关系剧烈反转却无情节铺垫
+6. prose（文本质感）：AI 生成痕迹明显的文字问题，包括但不限于：
+   - 滥用「不是……而是……」「仿佛」「似乎」「隐隐」「某种」「悄然」「不禁」
+   - 每段都直接解释角色情绪而非通过行为/对白传达
+   - 句子长度高度均一，缺乏节奏变化
+   - 对白信息密度过高，不像真人说话（缺少犹豫、口头禅、废话）
+   - 滥用排比对仗、段尾哲理总结句（"也许，这就是……"）
+   - 高频使用「眼中闪过一丝XX」「嘴角微微上扬」等模板化动作描写
+   注意：prose 类问题只在模式反复出现时才报告，偶尔一次不算问题
 
 # 严格输出要求
 * 只输出 JSON 对象，根字段为 issues 数组
-* 每个 issue 字段：category（上述 5 类之一）、severity（high/medium/low）、title（≤20 字标签）、description（≤80 字，用你自己的话总结问题，绝不复述叙事原文片段）、suggestion（≤80 字，给作者的修复建议）、entity_ids（涉及实体 id 数组，可空）、tick_start、tick_end
+* 每个 issue 字段：category（上述 6 类之一）、severity（high/medium/low）、title（≤20 字标签）、description（≤80 字，用你自己的话总结问题，绝不复述叙事原文片段）、suggestion（≤80 字，给作者的修复建议）、entity_ids（涉及实体 id 数组，可空）、tick_start、tick_end
 * 没有发现问题就返回 {"issues": []}
 * 严禁引用、复制、改写叙事原文的句子；只描述"什么不一致"
 

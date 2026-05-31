@@ -38,19 +38,22 @@ def _bind_style(db, world, style_id="style_jinyong"):
     return db.query(StyleProfile).filter_by(id=style_id).first()
 
 
-def test_author_no_style_is_noop(db, world_factory):
-    """没绑风格的世界：Author 不介入，narrator 保持 narrator。"""
+def test_author_no_style_uses_default(db, world_factory):
+    """没绑风格的世界：Author 使用默认风格，仍尝试改写。"""
     w, br = world_factory()
     _make_draft(db, br.id, tick=1, text="林冲拔剑。")
 
-    res = run_author_for_step(db, w, br.id, start_tick=1)
-    assert res.ok and res.reason == "no style profile (legacy world)"
-    assert res.log_id is None  # 没新建任何行
+    class FakeProvider:
+        name = "fake"
+        def chat(self, system, messages, tools, max_tokens=2048, temperature=0.7, timeout=120.0):
+            return LLMResponse(text="林冲腰间长剑出鞘。")
 
-    # 数据库里应该只有一条 narrator
-    rows = db.query(NarrativeLog).filter_by(branch_id=br.id).all()
-    assert len(rows) == 1
-    assert rows[0].role == "narrator"
+    res = run_author_for_step(db, w, br.id, start_tick=1, provider=FakeProvider())
+    assert res.ok and not res.fell_back
+    assert res.log_id is not None
+
+    finals = db.query(NarrativeLog).filter_by(branch_id=br.id, role="author_final").all()
+    assert len(finals) == 1
 
 
 def test_author_success_writes_final_and_retags_drafts(db, world_factory):
@@ -92,10 +95,10 @@ def test_author_llm_exception_falls_back(db, world_factory):
     assert res.ok and res.fell_back
     assert "llm error" in res.reason
 
+    # 回落不再写 author_final 到 DB（避免事件流泄漏到手稿）
     finals = db.query(NarrativeLog).filter_by(branch_id=br.id, role="author_final").all()
-    assert len(finals) == 1
-    # 回落分支：定稿文本就是粗稿原文
-    assert finals[0].text == "她推开门走了进去。"
+    assert len(finals) == 0
+    assert res.log_id is None
 
 
 def test_author_too_short_falls_back(db, world_factory):
@@ -280,7 +283,7 @@ def test_run_step_with_style_runs_author_pipeline(db, world_factory):
 
 
 def test_run_step_with_style_author_failure_falls_back(db, world_factory):
-    """Author 失败时，run_step 仍返回 narration（来自回落 final）。"""
+    """Author 失败时，run_step 仍正常返回，但不写 author_final。"""
     from app.engine.core.simulator import run_step
     from app.providers.base import ToolCall
 
@@ -314,7 +317,62 @@ def test_run_step_with_style_author_failure_falls_back(db, world_factory):
         prov_mod.get_provider = old
 
     assert res["ok"]
-    # 回落：final 文本就是粗稿原文
+    # 回落不再写 author_final（避免事件流泄漏）
     finals = db.query(NarrativeLog).filter_by(branch_id=br.id, role="author_final").all()
-    assert len(finals) == 1 and finals[0].text == "她推门进来。"
-    assert "她推门进来。" in res["narration"]
+    assert len(finals) == 0
+
+
+# ===== 自修循环测试 =====
+
+def test_author_self_revision_improves_text(db, world_factory):
+    """自审发现问题 → 改稿 → 最终输出是改后版本。"""
+    w, br = world_factory()
+    _bind_style(db, w, "style_serious_lit")
+    _make_draft(db, br.id, tick=1, text="她走进房间，感到一阵深深的悲伤。窗外的风吹着。")
+
+    call_seq = []
+
+    class RevisionProvider:
+        name = "revision"
+        def chat(self, system, messages, tools, max_tokens=2048, temperature=0.7, timeout=120.0):
+            call_seq.append(system[:20])
+            if "小说家" in system and "风格规范" in system:
+                # 初始改写
+                return LLMResponse(text="她推开门。房间里很暗，窗帘没拉开。她感到一阵深深的悲伤。也许，这就是命运。")
+            elif "文学编辑" in system:
+                # 自审：发现问题
+                return LLMResponse(text="- 【直白情绪标签】：「她感到一阵深深的悲伤」→ 直接命名情绪\n- 【段尾哲理句】：「也许，这就是命运」→ 哲理句收束\n\n需要修改")
+            elif "编辑给了修改意见" in system:
+                # 改稿
+                return LLMResponse(text="她推开门。房间里很暗，窗帘没拉开。她站了一会儿，手指无意识地攥紧了门把手。")
+            return LLMResponse(text="PASS")
+
+    res = run_author_for_step(db, w, br.id, start_tick=1, provider=RevisionProvider())
+    assert res.ok and not res.fell_back
+    # 最终文本应该是改稿后的版本（没有"深深的悲伤"和"也许这就是命运"）
+    assert "攥紧了门把手" in res.text
+    assert "深深的悲伤" not in res.text
+
+
+def test_author_self_revision_pass_on_first_try(db, world_factory):
+    """自审通过 → 不触发改稿，直接用初始输出。"""
+    w, br = world_factory()
+    _bind_style(db, w, "style_jinyong")
+    _make_draft(db, br.id, tick=1, text="萧峰提掌。那人后退三步。")
+
+    call_count = {"n": 0}
+
+    class PassProvider:
+        name = "pass_first"
+        def chat(self, system, messages, tools, max_tokens=2048, temperature=0.7, timeout=120.0):
+            call_count["n"] += 1
+            if "小说家" in system and "风格规范" in system:
+                return LLMResponse(text="萧峰右掌微抬，掌风未至，那人已连退三步，面色惨白。")
+            # 自审直接 PASS
+            return LLMResponse(text="PASS")
+
+    res = run_author_for_step(db, w, br.id, start_tick=1, provider=PassProvider())
+    assert res.ok and not res.fell_back
+    assert "掌风未至" in res.text
+    # 只调了 2 次：初始改写 + 自审。没有第 3 次（改稿）
+    assert call_count["n"] == 2

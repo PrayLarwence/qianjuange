@@ -222,6 +222,38 @@ async function doDelete() {
     deleting.value = false;
   }
 }
+
+// 快速开始
+const GENRES = ['武侠', '科幻', '文学', '奇幻', '仙侠', '网文', '赛博', '悬疑'] as const;
+const quickOpen = ref(false);
+const quickDraft = ref({ name: '', genre: '' as string, description: '' });
+const quickBusy = ref(false);
+function openQuick() {
+  quickDraft.value = { name: '', genre: '', description: '' };
+  quickOpen.value = true;
+}
+function pickGenre(g: string) {
+  quickDraft.value.genre = quickDraft.value.genre === g ? '' : g;
+}
+async function submitQuick() {
+  if (!quickDraft.value.genre) { toast.error('请选择一个类型'); return; }
+  quickBusy.value = true;
+  try {
+    const r = await worldsApi.quickCreate({
+      genre: quickDraft.value.genre,
+      name: quickDraft.value.name.trim() || undefined,
+      description: quickDraft.value.description.trim() || undefined,
+    });
+    toast.success(`已创建「${r.name}」· ${r.characters} 个角色`);
+    quickOpen.value = false;
+    await load();
+    router.push(`/worlds/${r.id}/sim`);
+  } catch (e: any) {
+    toast.error(`创建失败：${e.message || e}`);
+  } finally {
+    quickBusy.value = false;
+  }
+}
 </script>
 
 <template>
@@ -237,8 +269,9 @@ async function doDelete() {
         <button class="btn btn-ghost" :disabled="jsonImporting" @click="pickJson">
           {{ jsonImporting ? '恢复中…' : '⬆ 恢复 JSON 备份' }}
         </button>
-        <button class="btn btn-accent" @click="openManuscript">📖 从手稿建</button>
+        <button class="btn btn-ghost" @click="openManuscript">📖 从手稿建</button>
         <button class="btn btn-ghost" @click="openCreate">+ 新建空白世界</button>
+        <button class="btn btn-accent" @click="openQuick">⚡ 快速开始</button>
       </div>
     </header>
 
@@ -246,9 +279,9 @@ async function doDelete() {
     <div v-else-if="err" class="text-muted">无法加载：{{ err }}</div>
     <div v-else-if="worlds.length === 0" class="surface rounded p-10 text-center">
       <p class="font-serif text-xl mb-2">还没有世界</p>
-      <p class="text-muted text-sm mb-5">从空白开始，或者把已有的小说丢进来续写。</p>
+      <p class="text-muted text-sm mb-5">选个类型写一句话，AI 帮你搭好骨架直接开写。</p>
       <div class="flex items-center justify-center gap-2">
-        <button class="btn btn-accent" @click="openCreate">+ 新建第一个世界</button>
+        <button class="btn btn-accent" @click="openQuick">⚡ 快速开始</button>
         <button class="btn btn-ghost" @click="openManuscript">📖 从手稿建</button>
       </div>
     </div>
@@ -398,6 +431,48 @@ async function doDelete() {
           <button class="btn btn-ghost" @click="manuscriptOpen = false">留在这里</button>
           <button class="btn btn-accent" @click="gotoNewWorld">进入新世界 →</button>
         </template>
+      </template>
+    </Dialog>
+
+    <!-- 快速开始 -->
+    <Dialog :open="quickOpen" title="快速开始" width="560px" @close="!quickBusy && (quickOpen = false)">
+      <div class="space-y-5">
+        <p class="text-sm text-muted leading-relaxed">
+          选个类型，写一句话描述你想要的故事。AI 会生成大纲和角色，你可以直接开始推演。
+        </p>
+
+        <div>
+          <span class="block text-xs uppercase tracking-wider text-muted mb-2">类型</span>
+          <div class="flex flex-wrap gap-2">
+            <button v-for="g in GENRES" :key="g"
+                    class="px-3 py-1.5 rounded text-sm border transition-colors"
+                    :class="quickDraft.genre === g
+                      ? 'border-accent bg-accent/10 text-accent'
+                      : 'border-border text-muted hover:border-accent/50'"
+                    @click="pickGenre(g)">
+              {{ g }}
+            </button>
+          </div>
+        </div>
+
+        <label class="block">
+          <span class="block text-xs uppercase tracking-wider text-muted mb-1.5">世界名称（可选）</span>
+          <input v-model="quickDraft.name" class="input" placeholder="留空由 AI 起名" />
+        </label>
+
+        <label class="block">
+          <span class="block text-xs uppercase tracking-wider text-muted mb-1.5">一句话描述</span>
+          <textarea v-model="quickDraft.description" rows="3" class="input !h-auto py-2 leading-relaxed"
+                    placeholder="例如：一个退隐江湖的刺客被迫重出，发现当年的雇主就是杀害师父的人"></textarea>
+        </label>
+      </div>
+
+      <template #footer>
+        <button class="btn btn-ghost" :disabled="quickBusy" @click="quickOpen = false">取消</button>
+        <button class="btn btn-accent" :disabled="quickBusy || !quickDraft.genre" @click="submitQuick">
+          <span v-if="quickBusy">生成中… 请稍候</span>
+          <span v-else>生成世界</span>
+        </button>
       </template>
     </Dialog>
 

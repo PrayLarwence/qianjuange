@@ -208,10 +208,69 @@ def test_run_one_critic_handles_provider_crash(db, world_factory):
         provider=P(),
         budget=budget,
     )
-    # critic 自己崩 → 默认放行，trace 标 error
+    # critic 崩溃 → 重试一次后仍崩 → 默认放行，trace 标 error
     assert parsed["verdict"] == "pass"
     assert tr.status == "error"
     assert "network down" in (tr.extra.get("error") or "")
+    assert tr.extra.get("retried") is True
+    assert budget.calls == 2
+
+
+def test_run_one_critic_retries_on_unparseable_then_succeeds(db, world_factory):
+    w, _ = world_factory()
+    db.commit()
+
+    class P:
+        name = "flaky"
+        def __init__(self):
+            self.calls = 0
+        def chat(self, *a, **kw):
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResponse(text="这不是JSON，乱码输出")
+            return LLMResponse(text='{"verdict":"fail","score":4,"reason":"节奏单调","suggestions":"加变化"}')
+
+    cfg = PipelineConfig(directors=[DirectorAgent()], authors=[AuthorAgent()])
+    budget = _Budget(cfg)
+    p = P()
+    parsed, tr = _run_one_critic(
+        db, "job_retry", w, seq=1, iteration=0,
+        critic=CriticAgent(name="retry_test", focus="节奏"),
+        final_text="测试文本。",
+        directive=None,
+        provider=p,
+        budget=budget,
+    )
+    assert parsed["verdict"] == "fail"
+    assert parsed["score"] == 4
+    assert tr.extra.get("retried") is True
+    assert budget.calls == 2
+    assert p.calls == 2
+
+
+def test_run_one_critic_retries_on_unparseable_both_fail(db, world_factory):
+    w, _ = world_factory()
+    db.commit()
+
+    class P:
+        name = "garbage"
+        def chat(self, *a, **kw):
+            return LLMResponse(text="完全无法解析的乱码响应")
+
+    cfg = PipelineConfig(directors=[DirectorAgent()], authors=[AuthorAgent()])
+    budget = _Budget(cfg)
+    parsed, tr = _run_one_critic(
+        db, "job_garbage", w, seq=1, iteration=0,
+        critic=CriticAgent(name="garbage_test"),
+        final_text="测试文本。",
+        directive=None,
+        provider=P(),
+        budget=budget,
+    )
+    assert parsed["verdict"] == "pass"
+    assert "unparseable" in parsed["reason"]
+    assert tr.extra.get("retried") is True
+    assert budget.calls == 2
 
 
 # ===== 集成：完整 orchestrator 走通 =====
@@ -234,7 +293,8 @@ def _director_then_critics_provider(critic_responses: list[str], author_rewrites
     后续重试时 critic_responses 接着消费。
     """
 def _director_then_critics_provider(critic_responses: list[str], author_rewrites: list[str] | None = None,
-                                     critics_per_round: int = 1):
+                                     critics_per_round: int = 1,
+                                     lore_sync: bool = False):
     """构造 FakeProvider，按 orchestrator 实际调用顺序排队：
       director_hop1, director_hop2, author_initial,
       [critic_round_0_x_N], rewrite_0, [critic_round_1_x_N], rewrite_1, ...
@@ -244,7 +304,12 @@ def _director_then_critics_provider(critic_responses: list[str], author_rewrites
     base = [
         LLMResponse(tool_calls=[ToolCall(id="t1", name="narrate", arguments={"text": "夜风掠过城墙。林冲提刀。"})]),
         LLMResponse(tool_calls=[ToolCall(id="t2", name="end_turn", arguments={})]),
+    ]
+    if lore_sync:
+        base.append(LLMResponse(text='{"lore":[]}'))
+    base += [
         LLMResponse(text="夜风掠过苍青色的城墙，林冲缓缓握紧了腰间的雁翎刀。"),
+        LLMResponse(text="PASS"),  # author self-review → no issues
     ]
     cr = list(critic_responses)
     rw = list(author_rewrites or [])
@@ -566,6 +631,7 @@ def test_query_pipeline_metrics_aggregates(db, world_factory):
         author_rewrites=["改后。"],
     )
     run_orchestrated_step(db, w, "2", job_id="m2", cfg=cfg, provider=p2)
+
     # job 3: 全 fail → forced_accept
     p3 = _director_then_critics_provider(
         critic_responses=[
@@ -573,6 +639,7 @@ def test_query_pipeline_metrics_aggregates(db, world_factory):
             '{"verdict":"fail","score":2,"reason":"差2","suggestions":"y"}',
         ],
         author_rewrites=["改后。"],
+        lore_sync=True,
     )
     run_orchestrated_step(db, w, "3", job_id="m3", cfg=cfg, provider=p3)
 
@@ -691,6 +758,60 @@ def test_arc_critic_kind_serialized_round_trip():
         critics=[CriticAgent(name="y")],
     )
     assert cfg2.critics[0].kind == "general"
+
+
+def test_severity_enforcement_overrides_llm_verdict(db, world_factory):
+    """severity=lenient + score=6 + verdict=fail → 程序化强制 pass。"""
+    w, _ = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="lenient_c", severity="lenient")],
+        max_critic_retries=2,
+    )
+    # critic 给 score=6 但 verdict=fail（与 lenient 阈值 4 矛盾）
+    p = _director_then_critics_provider(
+        critic_responses=['{"verdict":"fail","score":6,"reason":"minor issue","suggestions":"tweak"}'],
+    )
+    res = run_orchestrated_step(db, w, "测试", job_id="j_sev1", cfg=cfg, provider=p)
+    # 应被强制 pass，不触发重写
+    assert res["final_verdict"] == "pass"
+    assert res["critic_rounds"] == 1
+
+    tr = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_sev1", AgentTrace.role == "critic")
+        .first()
+    )
+    assert tr.verdict == "pass"
+    assert "auto-pass" in (tr.output_summary or "")
+
+
+def test_severity_enforcement_does_not_override_when_score_below_threshold(db, world_factory):
+    """severity=strict + score=5 + verdict=fail → 不覆盖，保持 fail。"""
+    w, _ = world_factory()
+    _bind_style(db, w)
+    db.commit()
+
+    cfg = PipelineConfig(
+        directors=[DirectorAgent()], authors=[AuthorAgent()],
+        critics=[CriticAgent(name="strict_c", severity="strict")],
+        max_critic_retries=0,
+    )
+    p = _director_then_critics_provider(
+        critic_responses=['{"verdict":"fail","score":5,"reason":"bad","suggestions":"fix"}'],
+    )
+    res = run_orchestrated_step(db, w, "测试", job_id="j_sev2", cfg=cfg, provider=p)
+    assert res["final_verdict"] == "forced_accept"
+
+    tr = (
+        db.query(AgentTrace)
+        .filter(AgentTrace.job_id == "j_sev2", AgentTrace.role == "critic")
+        .first()
+    )
+    assert tr.verdict == "fail"
 
 
 # ===== Best-of-K author 多候选 =====
@@ -885,7 +1006,7 @@ def test_best_of_k_metrics_excludes_ranking_traces(db, world_factory):
         max_critic_retries=0,
     )
     p = _best_of_k_provider(
-        candidate_texts=["候选 0", "候选 1"],
+        candidate_texts=["候选零：夜风过城墙。", "候选壹：林冲提刀立。"],
         critic_responses_per_candidate=[
             ['{"verdict":"pass","score":7,"reason":"ok","suggestions":""}'],
             ['{"verdict":"pass","score":9,"reason":"better","suggestions":""}'],
@@ -970,7 +1091,7 @@ def test_multi_author_uses_per_author_temperature(db, world_factory):
         critics=[CriticAgent(name="strict")],
     )
     p = _best_of_k_provider(
-        candidate_texts=["冷温稿子。", "高温稿子。"],
+        candidate_texts=["冷温稿子：夜风过城墙。", "高温稿子：林冲提刀立。"],
         critic_responses_per_candidate=[
             ['{"verdict":"pass","score":7,"reason":"ok","suggestions":""}'],
             ['{"verdict":"pass","score":7,"reason":"ok","suggestions":""}'],
@@ -1022,7 +1143,7 @@ def test_multi_author_combined_with_best_of_k_cartesian(db, world_factory):
         max_critic_retries=0,
     )
     p = _best_of_k_provider(
-        candidate_texts=["a-low", "a-high", "b-low", "b-high"],
+        candidate_texts=["稿子a低分版本。", "稿子a高分版本。", "稿子b低分版本。", "稿子b高分版本。"],
         critic_responses_per_candidate=[
             ['{"verdict":"pass","score":6,"reason":"ok","suggestions":""}'],
             ['{"verdict":"pass","score":7,"reason":"ok","suggestions":""}'],

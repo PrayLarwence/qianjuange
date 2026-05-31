@@ -66,16 +66,7 @@ def build_character_view(
         if isinstance(k, str):
             recalled_ids.add(k)
 
-    # 2. spatial visibility — entities within sight_radius of me on the map
-    visible_by_sight: set[str] = set()
-    if me.map_x is not None and me.map_y is not None:
-        for e in all_alive:
-            if e.id == me.id or e.map_x is None or e.map_y is None:
-                continue
-            if abs(e.map_x - me.map_x) <= sight_radius and abs(e.map_y - me.map_y) <= sight_radius:
-                visible_by_sight.add(e.id)
-
-    # 3. event scoping — events I participated in, plus recent events at my location
+    # 2. event scoping — events I participated in, plus recent events at my location
     my_events = (db.query(Event)
                    .filter(Event.branch_id == branch_id, Event.deleted == 0)
                    .order_by(Event.tick.desc(), Event.created_at.desc())
@@ -98,7 +89,7 @@ def build_character_view(
         for pid in (ev.participants or []):
             recalled_ids.add(pid)
 
-    visible_ids = visible_by_sight | recalled_ids | {me.id}
+    visible_ids = recalled_ids | {me.id}
 
     # 4. emit entities with visibility tag
     entities_view: list[dict] = []
@@ -106,7 +97,7 @@ def build_character_view(
         if e.id not in visible_ids:
             continue
         ev_dict = _entity_for_view(e, viewer=me,
-                                    in_sight=(e.id in visible_by_sight),
+                                    in_sight=False,
                                     recalled=(e.id in recalled_ids))
         entities_view.append(ev_dict)
 
@@ -123,7 +114,6 @@ def build_character_view(
             "summary": me.summary,
             "persona": persona,
             "memories": list(me.memories or [])[-MEMORY_PROMPT_LIMIT:],
-            "pos": [me.map_x, me.map_y] if me.map_x is not None else None,
             "location_id": me.location_id,
             "attributes": me.attributes or {},
             "state": me.state or {},
@@ -168,8 +158,6 @@ def _entity_for_view(e: Entity, *, viewer: Entity,
         # I see you but don't know you — reveal only outwardly visible info.
         if e.attributes:
             out["visible_attrs"] = _public_attributes(e.attributes)
-    if e.map_x is not None and e.map_y is not None:
-        out["pos"] = [e.map_x, e.map_y]
     out["_visibility"] = (
         "self" if e.id == viewer.id else
         "known" if recalled and in_sight else

@@ -57,6 +57,10 @@ def list_worlds(db: Session = Depends(get_db)):
     return [{"id": w.id, "name": w.name, "description": w.description, "current_tick": w.current_tick, "active_branch_id": w.active_branch_id} for w in worlds]
 
 
+from .quick_create_api import quick_create
+router.add_api_route("/worlds/quick_create", quick_create, methods=["POST"])
+
+
 @router.get("/worlds/{world_id}")
 def get_world(world_id: str, db: Session = Depends(get_db)):
     world = db.query(World).filter_by(id=world_id).first()
@@ -82,10 +86,5 @@ def delete_world(world_id: str, db: Session = Depends(get_db)):
     db.query(Branch).filter_by(world_id=world_id).delete(synchronize_session=False)
     db.delete(world)
     db.commit()
-    try:
-        from ..engine import worldgen
-        worldgen.delete(world_id)
-    except Exception as e:
-        log.warning("failed to delete map for %s: %s", world_id, e)
     return {"ok": True}
 
